@@ -1,0 +1,5 @@
+1. Don't update submodule whose path is 
+   1>./external/libusb1
+   2>./jimtcl
+   3>./jimtcl-cmake
+   4>./src/jtag/drivers/libjaylink

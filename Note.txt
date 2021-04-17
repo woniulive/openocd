@@ -3,3 +3,4 @@
    2>./jimtcl
    3>./jimtcl-cmake
    4>./src/jtag/drivers/libjaylink
+2.replace file ./external/run-sh.bat sh with D:/Git/bin/sh.exe

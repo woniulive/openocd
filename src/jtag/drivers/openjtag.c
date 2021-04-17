@@ -82,7 +82,7 @@ typedef enum openjtag_tap_state {
 } openjtag_tap_state_t;
 
 /* OPENJTAG access library includes */
-#include <ftdi.h>
+#include "libftdi_helper.h"
 
 /* OpenJTAG vid/pid */
 static uint16_t openjtag_vid = 0x0403;
@@ -229,7 +229,7 @@ static int openjtag_buf_write_standard(
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
 
-	*bytes_written += retval;
+	*bytes_written = retval;
 
 	return ERROR_OK;
 }
@@ -436,8 +436,8 @@ static int openjtag_init_standard(void)
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
 
-	if (ftdi_usb_purge_buffers(&ftdic) < 0) {
-		LOG_ERROR("ftdi_purge_buffers: %s", ftdic.error_str);
+	if (ftdi_tcioflush(&ftdic) < 0) {
+		LOG_ERROR("ftdi flush: %s", ftdic.error_str);
 		return ERROR_JTAG_INIT_FAILED;
 	}
 
@@ -449,7 +449,7 @@ static int openjtag_init_cy7c65215(void)
 	int ret;
 
 	usbh = NULL;
-	ret = jtag_libusb_open(cy7c65215_vids, cy7c65215_pids, NULL, &usbh);
+	ret = jtag_libusb_open(cy7c65215_vids, cy7c65215_pids, NULL, &usbh, NULL);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("unable to open cy7c65215 device");
 		goto err;
@@ -591,8 +591,7 @@ static int openjtag_execute_tap_queue(void)
 #endif
 			jtag_read_buffer(buffer, openjtag_scan_result_buffer[res_count].command);
 
-			if (openjtag_scan_result_buffer[res_count].buffer)
-				free(openjtag_scan_result_buffer[res_count].buffer);
+			free(openjtag_scan_result_buffer[res_count].buffer);
 
 			res_count++;
 		}
@@ -652,7 +651,6 @@ static void openjtag_add_scan(uint8_t *buffer, int length, struct scan_command *
 			/* whole byte */
 
 			/* bits to transfer */
-			bits = 7;
 			command |= (7 << 5);
 			length -= 8;
 		}
@@ -690,7 +688,7 @@ static void openjtag_execute_sleep(struct jtag_command *cmd)
 
 static void openjtag_set_state(uint8_t openocd_state)
 {
-	int8_t state = openjtag_get_tap_state(openocd_state);
+	uint8_t state = openjtag_get_tap_state(openocd_state);
 
 	uint8_t buf = 0;
 	buf = 0x01;

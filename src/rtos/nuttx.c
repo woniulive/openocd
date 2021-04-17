@@ -72,7 +72,7 @@ struct tcb {
 	uint8_t  dat[512];
 };
 
-struct {
+static struct {
 	uint32_t addr;
 	uint32_t prio;
 } g_tasklist[TASK_QUEUE_NUM];
@@ -174,7 +174,7 @@ static int rcmd_offset(const char *cmd, const char *name)
 static int nuttx_thread_packet(struct connection *connection,
 	char const *packet, int packet_size)
 {
-	char cmd[GDB_BUFFER_SIZE / 2 + 1] = ""; /* Extra byte for nul-termination */
+	char cmd[GDB_BUFFER_SIZE / 2 + 1] = ""; /* Extra byte for null-termination */
 
 	if (!strncmp(packet, "qRcmd", 5)) {
 		size_t len = unhexify((uint8_t *)cmd, packet + 6, sizeof(cmd));
@@ -380,12 +380,12 @@ static int nuttx_get_thread_reg_list(struct rtos *rtos, int64_t thread_id,
 	    (uint32_t)thread_id + xcpreg_offset, reg_list, num_regs);
 }
 
-static int nuttx_get_symbol_list_to_lookup(symbol_table_elem_t *symbol_list[])
+static int nuttx_get_symbol_list_to_lookup(struct symbol_table_elem *symbol_list[])
 {
 	unsigned int i;
 
-	*symbol_list = (symbol_table_elem_t *) calloc(1,
-		sizeof(symbol_table_elem_t) * ARRAY_SIZE(nuttx_symbol_list));
+	*symbol_list = (struct symbol_table_elem *) calloc(1,
+		sizeof(struct symbol_table_elem) * ARRAY_SIZE(nuttx_symbol_list));
 
 	for (i = 0; i < ARRAY_SIZE(nuttx_symbol_list); i++)
 		(*symbol_list)[i].symbol_name = nuttx_symbol_list[i];
@@ -401,4 +401,3 @@ struct rtos_type nuttx_rtos = {
 	.get_thread_reg_list = nuttx_get_thread_reg_list,
 	.get_symbol_list_to_lookup = nuttx_get_symbol_list_to_lookup,
 };
-

@@ -31,7 +31,7 @@
 
 #include <target/cortex_m.h>
 
-#include <libusb.h>
+#include "libusb_helper.h"
 
 #define ICDI_WRITE_ENDPOINT 0x02
 #define ICDI_READ_ENDPOINT 0x83
@@ -44,8 +44,7 @@
 #define PACKET_END "#"
 
 struct icdi_usb_handle_s {
-	libusb_context *usb_ctx;
-	libusb_device_handle *usb_dev;
+	struct libusb_device_handle *usb_dev;
 
 	char *read_buffer;
 	char *write_buffer;
@@ -54,10 +53,18 @@ struct icdi_usb_handle_s {
 	uint32_t max_rw_packet; /* max X packet (read/write memory) transfers */
 };
 
+#ifdef HLA_MULTICORE
+#define TARGET_ARGUMENT	, struct target *target
+#define PASS_TARGET_ARGUMENT	, target
+#else
+#define TARGET_ARGUMENT
+#define PASS_TARGET_ARGUMENT
+#endif
+
 static int icdi_usb_read_mem(void *handle, uint32_t addr, uint32_t size,
-		uint32_t count, uint8_t *buffer, struct target *target);
+		uint32_t count, uint8_t *buffer TARGET_ARGUMENT);
 static int icdi_usb_write_mem(void *handle, uint32_t addr, uint32_t size,
-		uint32_t count, const uint8_t *buffer, struct target *target);
+		uint32_t count, const uint8_t *buffer TARGET_ARGUMENT);
 
 static int remote_escape_output(const char *buffer, int len, char *out_buf, int *out_len, int out_maxlen)
 {
@@ -277,29 +284,29 @@ static int icdi_get_cmd_result(void *handle)
 	return ERROR_OK;
 }
 
-static int icdi_usb_idcode(void *handle, uint32_t *idcode, struct target *target)
+static int icdi_usb_idcode(void *handle, uint32_t *idcode TARGET_ARGUMENT)
 {
 	*idcode = 0;
 	return ERROR_OK;
 }
 
-static int icdi_usb_write_debug_reg(void *handle, uint32_t addr, uint32_t val, struct target *target)
+static int icdi_usb_write_debug_reg(void *handle, uint32_t addr, uint32_t val TARGET_ARGUMENT)
 {
 	uint8_t buf[4];
 	/* REVISIT: There's no target pointer here so there's no way to use target_buffer_set_u32().
 	 * I guess all supported chips are little-endian anyway. */
 	h_u32_to_le(buf, val);
-	return icdi_usb_write_mem(handle, addr, 4, 1, buf, target);
+	return icdi_usb_write_mem(handle, addr, 4, 1, buf PASS_TARGET_ARGUMENT);
 }
 
-static enum target_state icdi_usb_state(void *handle, struct target *target)
+static enum target_state icdi_usb_state(void *handle TARGET_ARGUMENT)
 {
 	int result;
 	struct icdi_usb_handle_s *h = handle;
 	uint32_t dhcsr;
 	uint8_t buf[4];
 
-	result = icdi_usb_read_mem(h, DCB_DHCSR, 4, 1, buf, target);
+	result = icdi_usb_read_mem(h, DCB_DHCSR, 4, 1, buf PASS_TARGET_ARGUMENT);
 	if (result != ERROR_OK)
 		return TARGET_UNKNOWN;
 
@@ -413,7 +420,7 @@ static int icdi_usb_assert_srst(void *handle, int srst)
 	return ERROR_COMMAND_NOTFOUND;
 }
 
-static int icdi_usb_run(void *handle, struct target *target)
+static int icdi_usb_run(void *handle TARGET_ARGUMENT)
 {
 	int result;
 
@@ -432,7 +439,7 @@ static int icdi_usb_run(void *handle, struct target *target)
 	return result;
 }
 
-static int icdi_usb_halt(void *handle, struct target *target)
+static int icdi_usb_halt(void *handle TARGET_ARGUMENT)
 {
 	int result;
 
@@ -451,7 +458,7 @@ static int icdi_usb_halt(void *handle, struct target *target)
 	return result;
 }
 
-static int icdi_usb_step(void *handle, struct target *target)
+static int icdi_usb_step(void *handle TARGET_ARGUMENT)
 {
 	int result;
 
@@ -470,19 +477,19 @@ static int icdi_usb_step(void *handle, struct target *target)
 	return result;
 }
 
-static int icdi_usb_read_regs(void *handle, struct target *target)
+static int icdi_usb_read_regs(void *handle TARGET_ARGUMENT)
 {
 	/* currently unsupported */
 	return ERROR_OK;
 }
 
-static int icdi_usb_read_reg(void *handle, int num, uint32_t *val, struct target *target)
+static int icdi_usb_read_reg(void *handle, unsigned regsel, uint32_t *val TARGET_ARGUMENT)
 {
 	int result;
 	struct icdi_usb_handle_s *h = handle;
 	char cmd[10];
 
-	snprintf(cmd, sizeof(cmd), "p%x", num);
+	snprintf(cmd, sizeof(cmd), "p%x", regsel);
 	result = icdi_send_cmd(handle, cmd);
 	if (result != ERROR_OK)
 		return result;
@@ -505,14 +512,14 @@ static int icdi_usb_read_reg(void *handle, int num, uint32_t *val, struct target
 	return result;
 }
 
-static int icdi_usb_write_reg(void *handle, int num, uint32_t val, struct target *target)
+static int icdi_usb_write_reg(void *handle, unsigned regsel, uint32_t val TARGET_ARGUMENT)
 {
 	int result;
 	char cmd[20];
 	uint8_t buf[4];
 	h_u32_to_le(buf, val);
 
-	int cmd_len = snprintf(cmd, sizeof(cmd), "P%x=", num);
+	int cmd_len = snprintf(cmd, sizeof(cmd), "P%x=", regsel);
 	hexify(cmd + cmd_len, buf, 4, sizeof(cmd));
 
 	result = icdi_send_cmd(handle, cmd);
@@ -589,7 +596,7 @@ static int icdi_usb_write_mem_int(void *handle, uint32_t addr, uint32_t len, con
 }
 
 static int icdi_usb_read_mem(void *handle, uint32_t addr, uint32_t size,
-		uint32_t count, uint8_t *buffer, struct target *target)
+		uint32_t count, uint8_t *buffer TARGET_ARGUMENT)
 {
 	int retval = ERROR_OK;
 	struct icdi_usb_handle_s *h = handle;
@@ -617,7 +624,7 @@ static int icdi_usb_read_mem(void *handle, uint32_t addr, uint32_t size,
 }
 
 static int icdi_usb_write_mem(void *handle, uint32_t addr, uint32_t size,
-		uint32_t count, const uint8_t *buffer, struct target *target)
+		uint32_t count, const uint8_t *buffer TARGET_ARGUMENT)
 {
 	int retval = ERROR_OK;
 	struct icdi_usb_handle_s *h = handle;
@@ -657,24 +664,17 @@ static int icdi_usb_close(void *handle)
 		return ERROR_OK;
 
 	if (h->usb_dev)
-		libusb_close(h->usb_dev);
+		jtag_libusb_close(h->usb_dev);
 
-	if (h->usb_ctx)
-		libusb_exit(h->usb_ctx);
-
-	if (h->read_buffer)
-		free(h->read_buffer);
-
-	if (h->write_buffer)
-		free(h->write_buffer);
-
+	free(h->read_buffer);
+	free(h->write_buffer);
 	free(handle);
-
 	return ERROR_OK;
 }
 
 static int icdi_usb_open(struct hl_interface_param_s *param, void **fd)
 {
+	/* TODO: Convert remaining libusb_ calls to jtag_libusb_ */
 	int retval;
 	struct icdi_usb_handle_s *h;
 
@@ -687,19 +687,14 @@ static int icdi_usb_open(struct hl_interface_param_s *param, void **fd)
 		return ERROR_FAIL;
 	}
 
-	LOG_DEBUG("transport: %d vid: 0x%04x pid: 0x%04x", param->transport,
-		  param->vid[0], param->pid[0]);
+	for (uint8_t i = 0; param->vid[i] && param->pid[i]; ++i)
+		LOG_DEBUG("transport: %d vid: 0x%04x pid: 0x%04x serial: %s", param->transport,
+			param->vid[i], param->pid[i], param->serial ? param->serial : "");
 
-	/* TODO: convert libusb_ calls to jtag_libusb_ */
-	if (param->vid[1])
-		LOG_WARNING("Bad configuration: 'hla_vid_pid' command does not accept more than one VID PID pair on ti-icdi!");
+	/* TI (Stellaris) ICDI provides its serial number in the USB descriptor;
+	   no need to provide a callback here. */
+	jtag_libusb_open(param->vid, param->pid, param->serial, &h->usb_dev, NULL);
 
-	if (libusb_init(&h->usb_ctx) != 0) {
-		LOG_ERROR("libusb init failed");
-		goto error_open;
-	}
-
-	h->usb_dev = libusb_open_device_with_vid_pid(h->usb_ctx, param->vid[0], param->pid[0]);
 	if (!h->usb_dev) {
 		LOG_ERROR("open failed");
 		goto error_open;

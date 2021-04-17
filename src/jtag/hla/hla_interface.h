@@ -41,17 +41,15 @@ struct hl_interface_param_s {
 	/** List of recognised PIDs */
 	uint16_t pid[HLA_MAX_USB_IDS + 1];
 	/** */
-	unsigned api;
-	/** */
 	enum hl_transports transport;
 	/** */
 	bool connect_under_reset;
 	/** Initial interface clock clock speed */
 	int initial_interface_speed;
 	/** */
-	unsigned long port;
+	bool use_stlink_tcp;
 	/** */
-	unsigned long current_core;
+	uint16_t stlink_tcp_port;
 };
 
 struct hl_interface_s {

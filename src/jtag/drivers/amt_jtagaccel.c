@@ -370,11 +370,10 @@ static int amt_jtagaccel_execute_queue(void)
 				amt_jtagaccel_scan(cmd->cmd.scan->ir_scan, type, buffer, scan_size);
 				if (jtag_read_buffer(buffer, cmd->cmd.scan) != ERROR_OK)
 					retval = ERROR_JTAG_QUEUE_FAILED;
-				if (buffer)
-					free(buffer);
+				free(buffer);
 				break;
 			case JTAG_SLEEP:
-				LOG_DEBUG_IO("sleep %" PRIi32, cmd->cmd.sleep->us);
+				LOG_DEBUG_IO("sleep %" PRIu32, cmd->cmd.sleep->us);
 				jtag_sleep(cmd->cmd.sleep->us);
 				break;
 			default:
@@ -393,7 +392,7 @@ int amt_jtagaccel_get_giveio_access(void)
 	HANDLE h;
 	OSVERSIONINFO version;
 
-	version.dwOSVersionInfoSize = sizeof version;
+	version.dwOSVersionInfoSize = sizeof(version);
 	if (!GetVersionEx(&version)) {
 		errno = EINVAL;
 		return -1;

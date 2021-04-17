@@ -31,7 +31,7 @@ extern struct rtos_type FreeRTOS_rtos;
 extern struct rtos_type ThreadX_rtos;
 extern struct rtos_type eCos_rtos;
 extern struct rtos_type Linux_os;
-extern struct rtos_type ChibiOS_rtos;
+extern struct rtos_type chibios_rtos;
 extern struct rtos_type chromium_ec_rtos;
 extern struct rtos_type embKernel_rtos;
 extern struct rtos_type mqx_rtos;
@@ -39,22 +39,27 @@ extern struct rtos_type uCOS_III_rtos;
 extern struct rtos_type multicore_rtos;
 extern struct rtos_type nuttx_rtos;
 extern struct rtos_type hwthread_rtos;
+extern struct rtos_type riot_rtos;
 
 static struct rtos_type *rtos_types[] = {
 	&ThreadX_rtos,
 	&FreeRTOS_rtos,
 	&eCos_rtos,
 	&Linux_os,
-	&ChibiOS_rtos,
+	&chibios_rtos,
 	&chromium_ec_rtos,
 	&embKernel_rtos,
 	&mqx_rtos,
 	&uCOS_III_rtos,
 	&nuttx_rtos,
 	&multicore_rtos,
+	&riot_rtos,
+	/* keep this as last, as it always matches with rtos auto */
 	&hwthread_rtos,
 	NULL
 };
+
+static int rtos_try_next(struct target *target);
 
 int rtos_thread_packet(struct connection *connection, const char *packet, int packet_size);
 
@@ -99,9 +104,7 @@ static void os_free(struct target *target)
 	if (!target->rtos)
 		return;
 
-	if (target->rtos->symbols)
-		free(target->rtos->symbols);
-
+	free(target->rtos->symbols);
 	free(target->rtos);
 	target->rtos = NULL;
 }
@@ -123,7 +126,7 @@ int rtos_create(Jim_GetOptInfo *goi, struct target *target)
 {
 	int x;
 	const char *cp;
-	struct Jim_Obj *res;
+	Jim_Obj *res;
 	int e;
 
 	if (!goi->isconfigure && goi->argc != 0) {
@@ -161,6 +164,11 @@ int rtos_create(Jim_GetOptInfo *goi, struct target *target)
 	return JIM_ERR;
 }
 
+void rtos_destroy(struct target *target)
+{
+	os_free(target);
+}
+
 int gdb_thread_packet(struct connection *connection, char const *packet, int packet_size)
 {
 	struct target *target = get_target_from_connection(connection);
@@ -170,9 +178,9 @@ int gdb_thread_packet(struct connection *connection, char const *packet, int pac
 	return target->rtos->gdb_thread_packet(connection, packet, packet_size);
 }
 
-static symbol_table_elem_t *next_symbol(struct rtos *os, char *cur_symbol, uint64_t cur_addr)
+static struct symbol_table_elem *next_symbol(struct rtos *os, char *cur_symbol, uint64_t cur_addr)
 {
-	symbol_table_elem_t *s;
+	struct symbol_table_elem *s;
 
 	if (!os->symbols)
 		os->type->get_symbol_list_to_lookup(&os->symbols);
@@ -194,7 +202,7 @@ static symbol_table_elem_t *next_symbol(struct rtos *os, char *cur_symbol, uint6
  * if 'symbol' is not declared optional */
 static bool is_symbol_mandatory(const struct rtos *os, const char *symbol)
 {
-	for (symbol_table_elem_t *s = os->symbols; s->symbol_name; ++s) {
+	for (struct symbol_table_elem *s = os->symbols; s->symbol_name; ++s) {
 		if (!strcmp(s->symbol_name, symbol))
 			return !s->optional;
 	}
@@ -225,8 +233,8 @@ int rtos_qsymbol(struct connection *connection, char const *packet, int packet_s
 	int rtos_detected = 0;
 	uint64_t addr = 0;
 	size_t reply_len;
-	char reply[GDB_BUFFER_SIZE + 1], cur_sym[GDB_BUFFER_SIZE / 2 + 1] = ""; /* Extra byte for nul-termination */
-	symbol_table_elem_t *next_sym = NULL;
+	char reply[GDB_BUFFER_SIZE + 1], cur_sym[GDB_BUFFER_SIZE / 2 + 1] = ""; /* Extra byte for null-termination */
+	struct symbol_table_elem *next_sym = NULL;
 	struct target *target = get_target_from_connection(connection);
 	struct rtos *os = target->rtos;
 
@@ -625,7 +633,7 @@ int rtos_generic_stack_read(struct target *target,
 	return ERROR_OK;
 }
 
-int rtos_try_next(struct target *target)
+static int rtos_try_next(struct target *target)
 {
 	struct rtos *os = target->rtos;
 	struct rtos_type **type = rtos_types;
@@ -640,10 +648,9 @@ int rtos_try_next(struct target *target)
 		return 0;
 
 	os->type = *type;
-	if (os->symbols) {
-		free(os->symbols);
-		os->symbols = NULL;
-	}
+
+	free(os->symbols);
+	os->symbols = NULL;
 
 	return 1;
 }

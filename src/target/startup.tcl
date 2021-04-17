@@ -66,7 +66,9 @@ proc ocd_process_reset_inner { MODE } {
 		if {![using_jtag] || [jtag tapisenabled [$t cget -chain-position]]} {
 			$t invoke-event examine-start
 			set err [catch "$t arp_examine allow-defer"]
-			if { $err == 0 } {
+			if { $err } {
+				$t invoke-event examine-fail
+			} else {
 				$t invoke-event examine-end
 			}
 		}
@@ -117,7 +119,7 @@ proc ocd_process_reset_inner { MODE } {
 				continue
 			}
 
-			# Wait upto 1 second for target to halt.  Why 1sec? Cause
+			# Wait up to 1 second for target to halt. Why 1sec? Cause
 			# the JTAG tap reset signal might be hooked to a slow
 			# resistor/capacitor circuit - and it might take a while
 			# to charge
@@ -177,12 +179,6 @@ proc using_hla {} {
 
 #########
 
-# Temporary migration aid.  May be removed starting in January 2011.
-proc armv4_5 params {
-	echo "DEPRECATED! use 'arm $params' not 'armv4_5 $params'"
-	arm $params
-}
-
 # Target/chain configuration scripts can either execute commands directly
 # or define a procedure which is executed once all configuration
 # scripts have completed.
@@ -203,21 +199,10 @@ proc init_target_events {} {
 	foreach t $targets {
 		set_default_target_event $t gdb-flash-erase-start "reset init"
 		set_default_target_event $t gdb-flash-write-end "reset halt"
-		set_default_target_event $t gdb-attach "halt"
+		set_default_target_event $t gdb-attach "halt 1000"
 	}
 }
 
 # Additionally board config scripts can define a procedure init_board that will be executed after init and init_targets
 proc init_board {} {
-}
-
-# deprecated target name cmds
-proc cortex_m3 args {
-	echo "DEPRECATED! use 'cortex_m' not 'cortex_m3'"
-	eval cortex_m $args
-}
-
-proc cortex_a8 args {
-	echo "DEPRECATED! use 'cortex_a' not 'cortex_a8'"
-	eval cortex_a $args
 }

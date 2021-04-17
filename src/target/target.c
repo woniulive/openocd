@@ -72,8 +72,6 @@ static int target_get_gdb_fileio_info_default(struct target *target,
 		struct gdb_fileio_info *fileio_info);
 static int target_gdb_fileio_end_default(struct target *target, int retcode,
 		int fileio_errno, bool ctrl_c);
-static int target_profiling_default(struct target *target, uint32_t *samples,
-		uint32_t max_num_samples, uint32_t *num_samples, uint32_t seconds);
 
 /* targets */
 extern struct target_type arm7tdmi_target;
@@ -148,18 +146,16 @@ static struct target_type *target_types[] = {
 	&mem_ap_target,
 	&esirisc_target,
 	&arcv2_target,
-#if BUILD_TARGET64
 	&aarch64_target,
 	&mips_mips64_target,
-#endif
 	NULL,
 };
 
 struct target *all_targets;
 static struct target_event_callback *target_event_callbacks;
 static struct target_timer_callback *target_timer_callbacks;
-LIST_HEAD(target_reset_callback_list);
-LIST_HEAD(target_trace_callback_list);
+static LIST_HEAD(target_reset_callback_list);
+static LIST_HEAD(target_trace_callback_list);
 static const int polling_interval = 100;
 
 static const Jim_Nvp nvp_assert[] = {
@@ -178,10 +174,10 @@ static const Jim_Nvp nvp_error_target[] = {
 	{ .value = ERROR_TARGET_TIMEOUT, .name = "err-timeout" },
 	{ .value = ERROR_TARGET_NOT_HALTED, .name = "err-not-halted" },
 	{ .value = ERROR_TARGET_FAILURE, .name = "err-failure" },
-	{ .value = ERROR_TARGET_UNALIGNED_ACCESS   , .name = "err-unaligned-access" },
-	{ .value = ERROR_TARGET_DATA_ABORT , .name = "err-data-abort" },
-	{ .value = ERROR_TARGET_RESOURCE_NOT_AVAILABLE , .name = "err-resource-not-available" },
-	{ .value = ERROR_TARGET_TRANSLATION_FAULT  , .name = "err-translation-fault" },
+	{ .value = ERROR_TARGET_UNALIGNED_ACCESS, .name = "err-unaligned-access" },
+	{ .value = ERROR_TARGET_DATA_ABORT, .name = "err-data-abort" },
+	{ .value = ERROR_TARGET_RESOURCE_NOT_AVAILABLE, .name = "err-resource-not-available" },
+	{ .value = ERROR_TARGET_TRANSLATION_FAULT, .name = "err-translation-fault" },
 	{ .value = ERROR_TARGET_NOT_RUNNING, .name = "err-not-running" },
 	{ .value = ERROR_TARGET_NOT_EXAMINED, .name = "err-not-examined" },
 	{ .value = -1, .name = NULL }
@@ -205,6 +201,8 @@ static const Jim_Nvp nvp_target_event[] = {
 	{ .value = TARGET_EVENT_RESUMED, .name = "resumed" },
 	{ .value = TARGET_EVENT_RESUME_START, .name = "resume-start" },
 	{ .value = TARGET_EVENT_RESUME_END, .name = "resume-end" },
+	{ .value = TARGET_EVENT_STEP_START, .name = "step-start" },
+	{ .value = TARGET_EVENT_STEP_END, .name = "step-end" },
 
 	{ .name = "gdb-start", .value = TARGET_EVENT_GDB_START },
 	{ .name = "gdb-end", .value = TARGET_EVENT_GDB_END },
@@ -219,6 +217,7 @@ static const Jim_Nvp nvp_target_event[] = {
 	{ .value = TARGET_EVENT_RESET_END,           .name = "reset-end" },
 
 	{ .value = TARGET_EVENT_EXAMINE_START, .name = "examine-start" },
+	{ .value = TARGET_EVENT_EXAMINE_FAIL, .name = "examine-fail" },
 	{ .value = TARGET_EVENT_EXAMINE_END, .name = "examine-end" },
 
 	{ .value = TARGET_EVENT_DEBUG_HALTED, .name = "debug-halted" },
@@ -228,10 +227,10 @@ static const Jim_Nvp nvp_target_event[] = {
 	{ .value = TARGET_EVENT_GDB_DETACH, .name = "gdb-detach" },
 
 	{ .value = TARGET_EVENT_GDB_FLASH_WRITE_START, .name = "gdb-flash-write-start" },
-	{ .value = TARGET_EVENT_GDB_FLASH_WRITE_END  , .name = "gdb-flash-write-end"   },
+	{ .value = TARGET_EVENT_GDB_FLASH_WRITE_END,   .name = "gdb-flash-write-end"   },
 
 	{ .value = TARGET_EVENT_GDB_FLASH_ERASE_START, .name = "gdb-flash-erase-start" },
-	{ .value = TARGET_EVENT_GDB_FLASH_ERASE_END  , .name = "gdb-flash-erase-end" },
+	{ .value = TARGET_EVENT_GDB_FLASH_ERASE_END,   .name = "gdb-flash-erase-end" },
 
 	{ .value = TARGET_EVENT_TRACE_CONFIG, .name = "trace-config" },
 
@@ -248,15 +247,15 @@ static const Jim_Nvp nvp_target_state[] = {
 };
 
 static const Jim_Nvp nvp_target_debug_reason[] = {
-	{ .name = "debug-request"            , .value = DBG_REASON_DBGRQ },
-	{ .name = "breakpoint"               , .value = DBG_REASON_BREAKPOINT },
-	{ .name = "watchpoint"               , .value = DBG_REASON_WATCHPOINT },
+	{ .name = "debug-request",             .value = DBG_REASON_DBGRQ },
+	{ .name = "breakpoint",                .value = DBG_REASON_BREAKPOINT },
+	{ .name = "watchpoint",                .value = DBG_REASON_WATCHPOINT },
 	{ .name = "watchpoint-and-breakpoint", .value = DBG_REASON_WPTANDBKPT },
-	{ .name = "single-step"              , .value = DBG_REASON_SINGLESTEP },
-	{ .name = "target-not-halted"        , .value = DBG_REASON_NOTHALTED  },
-	{ .name = "program-exit"             , .value = DBG_REASON_EXIT },
-	{ .name = "exception-catch"          , .value = DBG_REASON_EXC_CATCH },
-	{ .name = "undefined"                , .value = DBG_REASON_UNDEFINED },
+	{ .name = "single-step",               .value = DBG_REASON_SINGLESTEP },
+	{ .name = "target-not-halted",         .value = DBG_REASON_NOTHALTED  },
+	{ .name = "program-exit",              .value = DBG_REASON_EXIT },
+	{ .name = "exception-catch",           .value = DBG_REASON_EXC_CATCH },
+	{ .name = "undefined",                 .value = DBG_REASON_UNDEFINED },
 	{ .name = NULL, .value = -1 },
 };
 
@@ -270,10 +269,10 @@ static const Jim_Nvp nvp_target_endian[] = {
 
 static const Jim_Nvp nvp_reset_modes[] = {
 	{ .name = "unknown", .value = RESET_UNKNOWN },
-	{ .name = "run"    , .value = RESET_RUN },
-	{ .name = "halt"   , .value = RESET_HALT },
-	{ .name = "init"   , .value = RESET_INIT },
-	{ .name = NULL     , .value = -1 },
+	{ .name = "run",     .value = RESET_RUN },
+	{ .name = "halt",    .value = RESET_HALT },
+	{ .name = "init",    .value = RESET_INIT },
+	{ .name = NULL,      .value = -1 },
 };
 
 const char *debug_reason_name(struct target *t)
@@ -341,6 +340,15 @@ static int new_target_number(void)
 		t = t->next;
 	}
 	return x + 1;
+}
+
+static void append_to_list_all_targets(struct target *target)
+{
+	struct target **t = &all_targets;
+
+	while (*t)
+		t = &((*t)->next);
+	*t = target;
 }
 
 /* read a uint64_t from a buffer in target memory endianness */
@@ -592,7 +600,7 @@ int target_halt(struct target *target)
  * @param address Optionally used as the program counter.
  * @param handle_breakpoints True iff breakpoints at the resumption PC
  *	should be skipped.  (For example, maybe execution was stopped by
- *	such a breakpoint, in which case it would be counterprodutive to
+ *	such a breakpoint, in which case it would be counterproductive to
  *	let it re-trigger.
  * @param debug_execution False if all working areas allocated by OpenOCD
  *	should be released and/or restored to their original contents.
@@ -629,7 +637,18 @@ int target_resume(struct target *target, int current, target_addr_t address,
 	 * we poll. The CPU can even halt at the current PC as a result of
 	 * a software breakpoint being inserted by (a bug?) the application.
 	 */
+	/*
+	 * resume() triggers the event 'resumed'. The execution of TCL commands
+	 * in the event handler causes the polling of targets. If the target has
+	 * already halted for a breakpoint, polling will run the 'halted' event
+	 * handler before the pending 'resumed' handler.
+	 * Disable polling during resume() to guarantee the execution of handlers
+	 * in the correct order.
+	 */
+	bool save_poll = jtag_poll_get_enabled();
+	jtag_poll_set_enabled(false);
 	retval = target->type->resume(target, current, address, handle_breakpoints, debug_execution);
+	jtag_poll_set_enabled(save_poll);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -708,13 +727,17 @@ static int default_check_reset(struct target *target)
 	return ERROR_OK;
 }
 
+/* Equivalent Tcl code arp_examine_one is in src/target/startup.tcl
+ * Keep in sync */
 int target_examine_one(struct target *target)
 {
 	target_call_event_callbacks(target, TARGET_EVENT_EXAMINE_START);
 
 	int retval = target->type->examine(target);
-	if (retval != ERROR_OK)
+	if (retval != ERROR_OK) {
+		target_call_event_callbacks(target, TARGET_EVENT_EXAMINE_FAIL);
 		return retval;
+	}
 
 	target_call_event_callbacks(target, TARGET_EVENT_EXAMINE_END);
 
@@ -754,9 +777,11 @@ int target_examine(void)
 		if (target->defer_examine)
 			continue;
 
-		retval = target_examine_one(target);
-		if (retval != ERROR_OK)
-			return retval;
+		int retval2 = target_examine_one(target);
+		if (retval2 != ERROR_OK) {
+			LOG_WARNING("target %s examination failed", target_name(target));
+			retval = retval2;
+		}
 	}
 	return retval;
 }
@@ -789,6 +814,13 @@ static int target_soft_reset_halt(struct target *target)
  * algorithm.
  *
  * @param target used to run the algorithm
+ * @param num_mem_params
+ * @param mem_params
+ * @param num_reg_params
+ * @param reg_param
+ * @param entry_point
+ * @param exit_point
+ * @param timeout_ms
  * @param arch_info target-specific description of the algorithm.
  */
 int target_run_algorithm(struct target *target,
@@ -824,6 +856,12 @@ done:
  * Executes a target-specific native code algorithm and leaves it running.
  *
  * @param target used to run the algorithm
+ * @param num_mem_params
+ * @param mem_params
+ * @param num_reg_params
+ * @param reg_params
+ * @param entry_point
+ * @param exit_point
  * @param arch_info target-specific description of the algorithm.
  */
 int target_start_algorithm(struct target *target,
@@ -862,6 +900,12 @@ done:
  * Waits for an algorithm started with target_start_algorithm() to complete.
  *
  * @param target used to run the algorithm
+ * @param num_mem_params
+ * @param mem_params
+ * @param num_reg_params
+ * @param reg_params
+ * @param exit_point
+ * @param timeout_ms
  * @param arch_info target-specific description of the algorithm.
  */
 int target_wait_algorithm(struct target *target,
@@ -933,6 +977,7 @@ done:
  * @param entry_point address on the target to execute to start the algorithm
  * @param exit_point address at which to set a breakpoint to catch the
  *     end of the algorithm; can be 0 if target triggers a breakpoint itself
+ * @param arch_info
  */
 
 int target_run_flash_async_algorithm(struct target *target,
@@ -1021,11 +1066,11 @@ int target_run_flash_async_algorithm(struct target *target,
 			 * programming. The exact delay shouldn't matter as long as it's
 			 * less than buffer size / flash speed. This is very unlikely to
 			 * run when using high latency connections such as USB. */
-			alive_sleep(10);
+			alive_sleep(2);
 
 			/* to stop an infinite loop on some targets check and increment a timeout
 			 * this issue was observed on a stellaris using the new ICDI interface */
-			if (timeout++ >= 500) {
+			if (timeout++ >= 2500) {
 				LOG_ERROR("timeout waiting for algorithm, a target reset is recommended");
 				return ERROR_FLASH_OPERATION_FAILED;
 			}
@@ -1038,6 +1083,10 @@ int target_run_flash_async_algorithm(struct target *target,
 		/* Limit to the amount of data we actually want to write */
 		if (thisrun_bytes > count * block_size)
 			thisrun_bytes = count * block_size;
+
+		/* Force end of large blocks to be word aligned */
+		if (thisrun_bytes >= 16)
+			thisrun_bytes -= (rp + thisrun_bytes) & 0x03;
 
 		/* Write data to fifo */
 		retval = target_write_buffer(target, wp, thisrun_bytes, buffer);
@@ -1084,6 +1133,156 @@ int target_run_flash_async_algorithm(struct target *target,
 		retval = target_read_u32(target, rp_addr, &rp);
 		if (retval == ERROR_OK && rp == 0) {
 			LOG_ERROR("flash write algorithm aborted by target");
+			retval = ERROR_FLASH_OPERATION_FAILED;
+		}
+	}
+
+	return retval;
+}
+
+int target_run_read_async_algorithm(struct target *target,
+		uint8_t *buffer, uint32_t count, int block_size,
+		int num_mem_params, struct mem_param *mem_params,
+		int num_reg_params, struct reg_param *reg_params,
+		uint32_t buffer_start, uint32_t buffer_size,
+		uint32_t entry_point, uint32_t exit_point, void *arch_info)
+{
+	int retval;
+	int timeout = 0;
+
+	const uint8_t *buffer_orig = buffer;
+
+	/* Set up working area. First word is write pointer, second word is read pointer,
+	 * rest is fifo data area. */
+	uint32_t wp_addr = buffer_start;
+	uint32_t rp_addr = buffer_start + 4;
+	uint32_t fifo_start_addr = buffer_start + 8;
+	uint32_t fifo_end_addr = buffer_start + buffer_size;
+
+	uint32_t wp = fifo_start_addr;
+	uint32_t rp = fifo_start_addr;
+
+	/* validate block_size is 2^n */
+	assert(!block_size || !(block_size & (block_size - 1)));
+
+	retval = target_write_u32(target, wp_addr, wp);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = target_write_u32(target, rp_addr, rp);
+	if (retval != ERROR_OK)
+		return retval;
+
+	/* Start up algorithm on target */
+	retval = target_start_algorithm(target, num_mem_params, mem_params,
+			num_reg_params, reg_params,
+			entry_point,
+			exit_point,
+			arch_info);
+
+	if (retval != ERROR_OK) {
+		LOG_ERROR("error starting target flash read algorithm");
+		return retval;
+	}
+
+	while (count > 0) {
+		retval = target_read_u32(target, wp_addr, &wp);
+		if (retval != ERROR_OK) {
+			LOG_ERROR("failed to get write pointer");
+			break;
+		}
+
+		LOG_DEBUG("offs 0x%zx count 0x%" PRIx32 " wp 0x%" PRIx32 " rp 0x%" PRIx32,
+			(size_t)(buffer - buffer_orig), count, wp, rp);
+
+		if (wp == 0) {
+			LOG_ERROR("flash read algorithm aborted by target");
+			retval = ERROR_FLASH_OPERATION_FAILED;
+			break;
+		}
+
+		if (((wp - fifo_start_addr) & (block_size - 1)) || wp < fifo_start_addr || wp >= fifo_end_addr) {
+			LOG_ERROR("corrupted fifo write pointer 0x%" PRIx32, wp);
+			break;
+		}
+
+		/* Count the number of bytes available in the fifo without
+		 * crossing the wrap around. */
+		uint32_t thisrun_bytes;
+		if (wp >= rp)
+			thisrun_bytes = wp - rp;
+		else
+			thisrun_bytes = fifo_end_addr - rp;
+
+		if (thisrun_bytes == 0) {
+			/* Throttle polling a bit if transfer is (much) faster than flash
+			 * reading. The exact delay shouldn't matter as long as it's
+			 * less than buffer size / flash speed. This is very unlikely to
+			 * run when using high latency connections such as USB. */
+			alive_sleep(2);
+
+			/* to stop an infinite loop on some targets check and increment a timeout
+			 * this issue was observed on a stellaris using the new ICDI interface */
+			if (timeout++ >= 2500) {
+				LOG_ERROR("timeout waiting for algorithm, a target reset is recommended");
+				return ERROR_FLASH_OPERATION_FAILED;
+			}
+			continue;
+		}
+
+		/* Reset our timeout */
+		timeout = 0;
+
+		/* Limit to the amount of data we actually want to read */
+		if (thisrun_bytes > count * block_size)
+			thisrun_bytes = count * block_size;
+
+		/* Force end of large blocks to be word aligned */
+		if (thisrun_bytes >= 16)
+			thisrun_bytes -= (rp + thisrun_bytes) & 0x03;
+
+		/* Read data from fifo */
+		retval = target_read_buffer(target, rp, thisrun_bytes, buffer);
+		if (retval != ERROR_OK)
+			break;
+
+		/* Update counters and wrap write pointer */
+		buffer += thisrun_bytes;
+		count -= thisrun_bytes / block_size;
+		rp += thisrun_bytes;
+		if (rp >= fifo_end_addr)
+			rp = fifo_start_addr;
+
+		/* Store updated write pointer to target */
+		retval = target_write_u32(target, rp_addr, rp);
+		if (retval != ERROR_OK)
+			break;
+
+		/* Avoid GDB timeouts */
+		keep_alive();
+
+	}
+
+	if (retval != ERROR_OK) {
+		/* abort flash write algorithm on target */
+		target_write_u32(target, rp_addr, 0);
+	}
+
+	int retval2 = target_wait_algorithm(target, num_mem_params, mem_params,
+			num_reg_params, reg_params,
+			exit_point,
+			10000,
+			arch_info);
+
+	if (retval2 != ERROR_OK) {
+		LOG_ERROR("error waiting for target flash write algorithm");
+		retval = retval2;
+	}
+
+	if (retval == ERROR_OK) {
+		/* check if algorithm set wp = 0 after fifo writer loop finished */
+		retval = target_read_u32(target, wp_addr, &wp);
+		if (retval == ERROR_OK && wp == 0) {
+			LOG_ERROR("flash read algorithm aborted by target");
 			retval = ERROR_FLASH_OPERATION_FAILED;
 		}
 	}
@@ -1226,8 +1425,17 @@ int target_get_gdb_reg_list(struct target *target,
 		struct reg **reg_list[], int *reg_list_size,
 		enum target_register_class reg_class)
 {
-	int result = target->type->get_gdb_reg_list(target, reg_list,
+	int result = ERROR_FAIL;
+
+	if (!target_was_examined(target)) {
+		LOG_ERROR("Target not examined yet");
+		goto done;
+	}
+
+	result = target->type->get_gdb_reg_list(target, reg_list,
 			reg_list_size, reg_class);
+
+done:
 	if (result != ERROR_OK) {
 		*reg_list = NULL;
 		*reg_list_size = 0;
@@ -1249,19 +1457,29 @@ int target_get_gdb_reg_list_noread(struct target *target,
 bool target_supports_gdb_connection(struct target *target)
 {
 	/*
-	 * based on current code, we can simply exclude all the targets that
-	 * don't provide get_gdb_reg_list; this could change with new targets.
+	 * exclude all the targets that don't provide get_gdb_reg_list
+	 * or that have explicit gdb_max_connection == 0
 	 */
-	return !!target->type->get_gdb_reg_list;
+	return !!target->type->get_gdb_reg_list && !!target->gdb_max_connections;
 }
 
 int target_step(struct target *target,
 		int current, target_addr_t address, int handle_breakpoints)
 {
+	int retval;
+
     if (target->rtos && target->rtos->type->step_hook && target->rtos->type->step_hook(target, current, address, handle_breakpoints) == ERROR_OK)
         return ERROR_OK;
-    
-	return target->type->step(target, current, address, handle_breakpoints);
+
+	target_call_event_callbacks(target, TARGET_EVENT_STEP_START);
+
+	retval = target->type->step(target, current, address, handle_breakpoints);
+	if (retval != ERROR_OK)
+		return retval;
+
+	target_call_event_callbacks(target, TARGET_EVENT_STEP_END);
+
+	return retval;
 }
 
 int target_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fileio_info)
@@ -1298,13 +1516,9 @@ unsigned target_address_bits(struct target *target)
 	return 32;
 }
 
-int target_profiling(struct target *target, uint32_t *samples,
+static int target_profiling(struct target *target, uint32_t *samples,
 			uint32_t max_num_samples, uint32_t *num_samples, uint32_t seconds)
 {
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target %s is not halted (profiling)", target->cmd_name);
-		return ERROR_TARGET_NOT_HALTED;
-	}
 	return target->type->profiling(target, samples, max_num_samples,
 			num_samples, seconds);
 }
@@ -1765,10 +1979,8 @@ static void target_split_working_area(struct working_area *area, uint32_t size)
 
 		/* If backup memory was allocated to this area, it has the wrong size
 		 * now so free it and it will be reallocated if/when needed */
-		if (area->backup) {
-			free(area->backup);
-			area->backup = NULL;
-		}
+		free(area->backup);
+		area->backup = NULL;
 	}
 }
 
@@ -1788,16 +2000,13 @@ static void target_merge_working_areas(struct target *target)
 			/* Remove the last */
 			struct working_area *to_be_freed = c->next;
 			c->next = c->next->next;
-			if (to_be_freed->backup)
-				free(to_be_freed->backup);
+			free(to_be_freed->backup);
 			free(to_be_freed);
 
 			/* If backup memory was allocated to the remaining area, it's has
 			 * the wrong size now */
-			if (c->backup) {
-				free(c->backup);
-				c->backup = NULL;
-			}
+			free(c->backup);
+			c->backup = NULL;
 		} else {
 			c = c->next;
 		}
@@ -2027,8 +2236,7 @@ static void target_destroy(struct target *target)
 	if (target->type->deinit_target)
 		target->type->deinit_target(target);
 
-	if (target->semihosting)
-		free(target->semihosting);
+	free(target->semihosting);
 
 	jtag_unregister_event_callback(jtag_enable_callback, target);
 
@@ -2053,6 +2261,8 @@ static void target_destroy(struct target *target)
 		}
 		target->smp = 0;
 	}
+
+	rtos_destroy(target);
 
 	free(target->gdb_port_override);
 	free(target->type);
@@ -2122,7 +2332,7 @@ static int target_gdb_fileio_end_default(struct target *target,
 	return ERROR_OK;
 }
 
-static int target_profiling_default(struct target *target, uint32_t *samples,
+int target_profiling_default(struct target *target, uint32_t *samples,
 		uint32_t max_num_samples, uint32_t *num_samples, uint32_t seconds)
 {
 	struct timeval timeout, now;
@@ -2176,7 +2386,7 @@ static int target_profiling_default(struct target *target, uint32_t *samples,
  */
 int target_write_buffer(struct target *target, target_addr_t address, uint32_t size, const uint8_t *buffer)
 {
-	LOG_DEBUG("writing buffer of %" PRIi32 " byte at " TARGET_ADDR_FMT,
+	LOG_DEBUG("writing buffer of %" PRIu32 " byte at " TARGET_ADDR_FMT,
 			  size, address);
 
 	if (!target_was_examined(target)) {
@@ -2238,7 +2448,7 @@ static int target_write_buffer_default(struct target *target,
  */
 int target_read_buffer(struct target *target, target_addr_t address, uint32_t size, uint8_t *buffer)
 {
-	LOG_DEBUG("reading buffer of %" PRIi32 " byte at " TARGET_ADDR_FMT,
+	LOG_DEBUG("reading buffer of %" PRIu32 " byte at " TARGET_ADDR_FMT,
 			  size, address);
 
 	if (!target_was_examined(target)) {
@@ -2308,7 +2518,7 @@ int target_checksum_memory(struct target *target, target_addr_t address, uint32_
 	if (retval != ERROR_OK) {
 		buffer = malloc(size);
 		if (buffer == NULL) {
-			LOG_ERROR("error allocating buffer for section (%" PRId32 " bytes)", size);
+			LOG_ERROR("error allocating buffer for section (%" PRIu32 " bytes)", size);
 			return ERROR_COMMAND_SYNTAX_ERROR;
 		}
 		retval = target_read_buffer(target, address, size, buffer);
@@ -2868,12 +3078,12 @@ COMMAND_HANDLER(handle_reg_command)
 			for (i = 0, reg = cache->reg_list;
 					i < cache->num_regs;
 					i++, reg++, count++) {
-				if (reg->exist == false)
+				if (reg->exist == false || reg->hidden)
 					continue;
 				/* only print cached values if they are valid */
 				if (reg->valid) {
-					value = buf_to_str(reg->value,
-							reg->size, 16);
+					value = buf_to_hex_str(reg->value,
+							reg->size);
 					command_print(CMD,
 							"(%i) %s (/%" PRIu32 "): 0x%s%s",
 							count, reg->name,
@@ -2885,7 +3095,7 @@ COMMAND_HANDLER(handle_reg_command)
 				} else {
 					command_print(CMD, "(%i) %s (/%" PRIu32 ")",
 							  count, reg->name,
-							  reg->size) ;
+							  reg->size);
 				}
 			}
 			cache = cache->next;
@@ -2940,7 +3150,7 @@ COMMAND_HANDLER(handle_reg_command)
 
 		if (reg->valid == 0)
 			reg->type->get(reg);
-		value = buf_to_str(reg->value, reg->size, 16);
+		value = buf_to_hex_str(reg->value, reg->size);
 		command_print(CMD, "%s (/%i): 0x%s", reg->name, (int)(reg->size), value);
 		free(value);
 		return ERROR_OK;
@@ -2955,7 +3165,7 @@ COMMAND_HANDLER(handle_reg_command)
 
 		reg->type->set(reg, buf);
 
-		value = buf_to_str(reg->value, reg->size, 16);
+		value = buf_to_hex_str(reg->value, reg->size);
 		command_print(CMD, "%s (/%i): 0x%s", reg->name, (int)(reg->size), value);
 		free(value);
 
@@ -3148,7 +3358,7 @@ COMMAND_HANDLER(handle_step_command)
 
 	struct target *target = get_current_target(CMD_CTX);
 
-	return target->type->step(target, current_pc, addr, 1);
+	return target_step(target, current_pc, addr, 1);
 }
 
 void target_handle_md_output(struct command_invocation *cmd,
@@ -3383,6 +3593,99 @@ COMMAND_HANDLER(handle_mw_command)
 	return target_fill_mem(target, address, fn, wordsize, value, count);
 }
 
+COMMAND_HANDLER(handle_mbatch_command)
+{
+    if (CMD_ARGC < 2)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    
+    /*General syntax:
+		<Unique ID> <Subcommands>
+     
+      Sub-command syntax:
+		w:<address>:<access size>:<count>:<hex-encoded data> - write data
+		r:<address>:<access size>:<count> - read data
+		
+	  Reply syntax for each subcommand:
+		<status>:<optional data>
+	*/
+    
+    struct target *target = get_current_target(CMD_CTX);
+    command_print_sameline(cmd, "mbatch(%s):", CMD_ARGV[0]);
+    
+    for (int i = 1; i < CMD_ARGC; i++)
+    {
+        const char *pCmd = CMD_ARGV[i];
+        const char *p = strchr(pCmd, ':');
+        
+        int status = ERROR_OK;
+        uint8_t *data = NULL;
+        int printData = 0;
+        uint64_t args[3] = { 0, };	//address, size, count
+        
+        if (!p)
+            status = -ERROR_BAD_ARGUMENTS;
+        
+        for (int j = 0; j < sizeof(args) / sizeof(args[0]); j++)
+        {
+            if (p)
+            {
+                p++;
+                char *end = NULL;
+                args[j] = strtoull(p, &end, 0);
+                if (end == p || !end)
+                    status = -ERROR_BAD_ARGUMENTS;
+                else if (*end != ':' && *end != 0)
+                    status = -ERROR_BAD_ARGUMENTS;
+                
+                p = end;
+            }
+        }
+        
+        int bufferSize = (int)(args[1] * args[2]);
+        
+        if (status == ERROR_OK)
+        {
+            data = (uint8_t *)malloc(bufferSize);
+            
+            if (pCmd[0] == 'w')
+            {
+                if (!p)
+                    status = -ERROR_BAD_ARGUMENTS;
+                else
+                {
+                    int done = unhexify(data, p + 1, args[1] * args[2]);
+                    if (done != (args[1] * args[2]))
+                        status = -ERROR_INSUFFICIENT_BUFFER;
+                    else
+						status = target_write_memory(target, args[0], args[1], args[2], data);
+                }
+            }
+            else if (pCmd[0] == 'r')
+            {
+                status = target_read_memory(target, args[0], args[1], args[2], data);
+                printData = true;
+			}
+            else
+                status = -ERROR_BAD_ARGUMENTS;
+        }
+        
+        command_print_sameline(cmd, " %d", status);
+        if (status >= 0 && printData && data)
+        {
+            char *formattedData = malloc(bufferSize * 2 + 2);
+            hexify(formattedData, data, bufferSize, bufferSize * 2 + 2);
+            command_print_sameline(cmd, ":%s", formattedData);
+            free(formattedData);
+        }
+        
+        if (data)
+            free(data);        
+    }
+    
+    command_print(cmd, "");
+    return ERROR_OK;
+}
+
 static COMMAND_HELPER(parse_load_image_command_CMD_ARGV, struct image *image,
 		target_addr_t *min_address, target_addr_t *max_address)
 {
@@ -3395,11 +3698,11 @@ static COMMAND_HELPER(parse_load_image_command_CMD_ARGV, struct image *image,
 		target_addr_t addr;
 		COMMAND_PARSE_ADDRESS(CMD_ARGV[1], addr);
 		image->base_address = addr;
-		image->base_address_set = 1;
+		image->base_address_set = true;
 	} else
-		image->base_address_set = 0;
+		image->base_address_set = false;
 
-	image->start_address_set = 0;
+	image->start_address_set = false;
 
 	if (CMD_ARGC >= 4)
 		COMMAND_PARSE_ADDRESS(CMD_ARGV[3], *min_address);
@@ -3422,7 +3725,6 @@ COMMAND_HANDLER(handle_load_image_command)
 	uint32_t image_size;
 	target_addr_t min_address = 0;
 	target_addr_t max_address = -1;
-	int i;
 	struct image image;
 
 	int retval = CALL_COMMAND_HANDLER(parse_load_image_command_CMD_ARGV,
@@ -3440,7 +3742,7 @@ COMMAND_HANDLER(handle_load_image_command)
 
 	image_size = 0x0;
 	retval = ERROR_OK;
-	for (i = 0; i < image.num_sections; i++) {
+	for (unsigned int i = 0; i < image.num_sections; i++) {
 		buffer = malloc(image.sections[i].size);
 		if (buffer == NULL) {
 			command_print(CMD,
@@ -3459,7 +3761,7 @@ COMMAND_HANDLER(handle_load_image_command)
 		uint32_t offset = 0;
 		uint32_t length = buf_cnt;
 
-		/* DANGER!!! beware of unsigned comparision here!!! */
+		/* DANGER!!! beware of unsigned comparison here!!! */
 
 		if ((image.sections[i].base_address + buf_cnt >= min_address) &&
 				(image.sections[i].base_address < max_address)) {
@@ -3573,7 +3875,6 @@ static COMMAND_HELPER(handle_verify_image_command_internal, enum verify_mode ver
 	uint8_t *buffer;
 	size_t buf_cnt;
 	uint32_t image_size;
-	int i;
 	int retval;
 	uint32_t checksum = 0;
 	uint32_t mem_checksum = 0;
@@ -3597,13 +3898,13 @@ static COMMAND_HELPER(handle_verify_image_command_internal, enum verify_mode ver
 		target_addr_t addr;
 		COMMAND_PARSE_ADDRESS(CMD_ARGV[1], addr);
 		image.base_address = addr;
-		image.base_address_set = 1;
+		image.base_address_set = true;
 	} else {
-		image.base_address_set = 0;
+		image.base_address_set = false;
 		image.base_address = 0x0;
 	}
 
-	image.start_address_set = 0;
+	image.start_address_set = false;
 
 	retval = image_open(&image, CMD_ARGV[0], (CMD_ARGC == 3) ? CMD_ARGV[2] : NULL);
 	if (retval != ERROR_OK)
@@ -3612,12 +3913,12 @@ static COMMAND_HELPER(handle_verify_image_command_internal, enum verify_mode ver
 	image_size = 0x0;
 	int diffs = 0;
 	retval = ERROR_OK;
-	for (i = 0; i < image.num_sections; i++) {
+	for (unsigned int i = 0; i < image.num_sections; i++) {
 		buffer = malloc(image.sections[i].size);
 		if (buffer == NULL) {
 			command_print(CMD,
-					"error allocating buffer for section (%d bytes)",
-					(int)(image.sections[i].size));
+					"error allocating buffer for section (%" PRIu32 " bytes)",
+					image.sections[i].size);
 			break;
 		}
 		retval = image_read_section(&image, i, 0x0, image.sections[i].size, buffer, &buf_cnt);
@@ -3723,8 +4024,8 @@ static int handle_bp_command_list(struct command_invocation *cmd)
 	struct breakpoint *breakpoint = target->breakpoints;
 	while (breakpoint) {
 		if (breakpoint->type == BKPT_SOFT) {
-			char *buf = buf_to_str(breakpoint->orig_instr,
-					breakpoint->length, 16);
+			char *buf = buf_to_hex_str(breakpoint->orig_instr,
+					breakpoint->length);
 			command_print(cmd, "IVA breakpoint: " TARGET_ADDR_FMT ", 0x%x, %i, 0x%s",
 					breakpoint->address,
 					breakpoint->length,
@@ -3836,11 +4137,16 @@ COMMAND_HANDLER(handle_rbp_command)
 	if (CMD_ARGC != 1)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	target_addr_t addr;
-	COMMAND_PARSE_ADDRESS(CMD_ARGV[0], addr);
-
 	struct target *target = get_current_target(CMD_CTX);
-	breakpoint_remove(target, addr);
+
+	if (!strcmp(CMD_ARGV[0], "all")) {
+		breakpoint_remove_all(target);
+	} else {
+		target_addr_t addr;
+		COMMAND_PARSE_ADDRESS(CMD_ARGV[0], addr);
+
+		breakpoint_remove(target, addr);
+	}
 
 	return ERROR_OK;
 }
@@ -3868,7 +4174,7 @@ COMMAND_HANDLER(handle_wp_command)
 	}
 
 	enum watchpoint_rw type = WPT_ACCESS;
-	uint32_t addr = 0;
+	target_addr_t addr = 0;
 	uint32_t length = 0;
 	uint32_t data_value = 0x0;
 	uint32_t data_mask = 0xffffffff;
@@ -3898,7 +4204,7 @@ COMMAND_HANDLER(handle_wp_command)
 		/* fall through */
 	case 2:
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], length);
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+		COMMAND_PARSE_ADDRESS(CMD_ARGV[0], addr);
 		break;
 
 	default:
@@ -3918,8 +4224,8 @@ COMMAND_HANDLER(handle_rwp_command)
 	if (CMD_ARGC != 1)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	uint32_t addr;
-	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+	target_addr_t addr;
+	COMMAND_PARSE_ADDRESS(CMD_ARGV[0], addr);
 
 	struct target *target = get_current_target(CMD_CTX);
 	watchpoint_remove(target, addr);
@@ -4083,6 +4389,7 @@ COMMAND_HANDLER(handle_profile_command)
 	uint32_t offset;
 	uint32_t num_of_samples;
 	int retval = ERROR_OK;
+	bool halted_before_profiling = target->state == TARGET_HALTED;
 
 	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], offset);
 
@@ -4113,8 +4420,19 @@ COMMAND_HANDLER(handle_profile_command)
 		free(samples);
 		return retval;
 	}
-	if (target->state == TARGET_RUNNING) {
+
+	if (target->state == TARGET_RUNNING && halted_before_profiling) {
+		/* The target was halted before we started and is running now. Halt it,
+		 * for consistency. */
 		retval = target_halt(target);
+		if (retval != ERROR_OK) {
+			free(samples);
+			return retval;
+		}
+	} else if (target->state == TARGET_HALTED && !halted_before_profiling) {
+		/* The target was running before we started and is halted now. Resume
+		 * it, for consistency. */
+		retval = target_resume(target, 1, 0, 0, 0);
 		if (retval != ERROR_OK) {
 			free(samples);
 			return retval;
@@ -4275,7 +4593,7 @@ static int target_mem2array(Jim_Interp *interp, struct target *target, int argc,
 	} else {
 		char buf[100];
 		Jim_SetResult(interp, Jim_NewEmptyStringObj(interp));
-		sprintf(buf, "mem2array address: 0x%08" PRIx32 " is not aligned for %" PRId32 " byte reads",
+		sprintf(buf, "mem2array address: 0x%08" PRIx32 " is not aligned for %" PRIu32 " byte reads",
 				addr,
 				width);
 		Jim_AppendStrings(interp, Jim_GetResult(interp), buf, NULL);
@@ -4307,7 +4625,7 @@ static int target_mem2array(Jim_Interp *interp, struct target *target, int argc,
 			retval = target_read_memory(target, addr, width, count, buffer);
 		if (retval != ERROR_OK) {
 			/* BOO !*/
-			LOG_ERROR("mem2array: Read @ 0x%08" PRIx32 ", w=%" PRId32 ", cnt=%" PRId32 ", failed",
+			LOG_ERROR("mem2array: Read @ 0x%08" PRIx32 ", w=%" PRIu32 ", cnt=%" PRIu32 ", failed",
 					  addr,
 					  width,
 					  count);
@@ -4481,7 +4799,7 @@ static int target_array2mem(Jim_Interp *interp, struct target *target,
 	} else {
 		char buf[100];
 		Jim_SetResult(interp, Jim_NewEmptyStringObj(interp));
-		sprintf(buf, "array2mem address: 0x%08" PRIx32 " is not aligned for %" PRId32 " byte reads",
+		sprintf(buf, "array2mem address: 0x%08" PRIx32 " is not aligned for %" PRIu32 " byte reads",
 				addr,
 				width);
 		Jim_AppendStrings(interp, Jim_GetResult(interp), buf, NULL);
@@ -4530,7 +4848,7 @@ static int target_array2mem(Jim_Interp *interp, struct target *target,
 			retval = target_write_memory(target, addr, width, count, buffer);
 		if (retval != ERROR_OK) {
 			/* BOO !*/
-			LOG_ERROR("array2mem: Write @ 0x%08" PRIx32 ", w=%" PRId32 ", cnt=%" PRId32 ", failed",
+			LOG_ERROR("array2mem: Write @ 0x%08" PRIx32 ", w=%" PRIu32 ", cnt=%" PRIu32 ", failed",
 					  addr,
 					  width,
 					  count);
@@ -4580,6 +4898,11 @@ void target_handle_event(struct target *target, enum target_event e)
 			else 
 				retval = Jim_EvalObj(teap->interp, teap->body);
 
+			cmd_ctx->current_target_override = saved_target_override;
+
+			if (retval == ERROR_COMMAND_CLOSE_CONNECTION)
+				return;
+
 			if (retval == JIM_RETURN)
 				retval = teap->interp->returnCode;
 
@@ -4592,8 +4915,6 @@ void target_handle_event(struct target *target, enum target_event e)
 				/* clean both error code and stacktrace before return */
 				Jim_Eval(teap->interp, "error \"\" \"\"");
 			}
-
-			cmd_ctx->current_target_override = saved_target_override;
 		}
 	}
 }
@@ -4626,6 +4947,7 @@ enum target_cfg_param {
 	TCFG_RTOS,
 	TCFG_DEFER_EXAMINE,
 	TCFG_GDB_PORT,
+	TCFG_GDB_MAX_CONNECTIONS,
 };
 
 static Jim_Nvp nvp_config_opts[] = {
@@ -4635,13 +4957,14 @@ static Jim_Nvp nvp_config_opts[] = {
 	{ .name = "-work-area-phys",   .value = TCFG_WORK_AREA_PHYS },
 	{ .name = "-work-area-size",   .value = TCFG_WORK_AREA_SIZE },
 	{ .name = "-work-area-backup", .value = TCFG_WORK_AREA_BACKUP },
-	{ .name = "-endian" ,          .value = TCFG_ENDIAN },
+	{ .name = "-endian",           .value = TCFG_ENDIAN },
 	{ .name = "-coreid",           .value = TCFG_COREID },
 	{ .name = "-chain-position",   .value = TCFG_CHAIN_POSITION },
 	{ .name = "-dbgbase",          .value = TCFG_DBGBASE },
 	{ .name = "-rtos",             .value = TCFG_RTOS },
 	{ .name = "-defer-examine",    .value = TCFG_DEFER_EXAMINE },
 	{ .name = "-gdb-port",         .value = TCFG_GDB_PORT },
+	{ .name = "-gdb-max-connections",   .value = TCFG_GDB_MAX_CONNECTIONS },
 	{ .name = NULL, .value = -1 }
 };
 
@@ -4678,7 +5001,7 @@ static int target_configure(Jim_GetOptInfo *goi, struct target *target)
 		}
 		switch (n->value) {
 		case TCFG_TYPE:
-			/* not setable */
+			/* not settable */
 			if (goi->isconfigure) {
 				Jim_SetResultFormatted(goi->interp,
 						"not settable: %s", n->name);
@@ -4732,6 +5055,11 @@ no_params:
 				}
 
 				if (goi->isconfigure) {
+					/* START_DEPRECATED_TPIU */
+					if (n->value == TARGET_EVENT_TRACE_CONFIG)
+						LOG_INFO("DEPRECATED target event %s", n->name);
+					/* END_DEPRECATED_TPIU */
+
 					bool replace = true;
 					if (teap == NULL) {
 						/* create new */
@@ -4941,6 +5269,7 @@ no_params:
 				e = Jim_GetOpt_String(goi, &s, NULL);
 				if (e != JIM_OK)
 					return e;
+				free(target->gdb_port_override);
 				target->gdb_port_override = strdup(s);
 			} else {
 				if (goi->argc != 0)
@@ -4948,6 +5277,25 @@ no_params:
 		}
 			Jim_SetResultString(goi->interp, target->gdb_port_override ? : "undefined", -1);
 			/* loop for more */
+			break;
+
+		case TCFG_GDB_MAX_CONNECTIONS:
+			if (goi->isconfigure) {
+				struct command_context *cmd_ctx = current_command_context(goi->interp);
+				if (cmd_ctx->mode != COMMAND_CONFIG) {
+					Jim_SetResultString(goi->interp, "-gdb-max-conenctions must be configured before 'init'", -1);
+					return JIM_ERR;
+				}
+
+				e = Jim_GetOpt_Wide(goi, &w);
+				if (e != JIM_OK)
+					return e;
+				target->gdb_max_connections = (w < 0) ? CONNECTION_LIMIT_UNLIMITED : (int)w;
+			} else {
+				if (goi->argc != 0)
+					goto no_params;
+			}
+			Jim_SetResult(goi->interp, Jim_NewIntObj(goi->interp, target->gdb_max_connections));
 			break;
 		}
 	} /* while (goi->argc) */
@@ -5007,7 +5355,7 @@ static int jim_target_examine(Jim_Interp *interp, int argc, Jim_Obj *const *argv
 	if (goi.argc > 0 &&
 	    strcmp(Jim_GetString(argv[1], NULL), "allow-defer") == 0) {
 		/* consume it */
-		struct Jim_Obj *obj;
+		Jim_Obj *obj;
 		int e = Jim_GetOpt_Obj(&goi, &obj);
 		if (e != JIM_OK)
 			return e;
@@ -5177,7 +5525,6 @@ static int jim_target_wait_state(Jim_Interp *interp, int argc, Jim_Obj *const *a
 				"target: %s wait %s fails (%#s) %s",
 				target_name(target), n->name,
 				eObj, target_strerror_safe(e));
-		Jim_FreeNewObj(interp, eObj);
 		return JIM_ERR;
 	}
 	return JIM_OK;
@@ -5307,7 +5654,7 @@ static const struct command_registration target_instance_command_handlers[] = {
 		.usage = "address [count]",
 	},
 	{
-		.name = "array2mem",
+    	.name = "array2mem",
 		.mode = COMMAND_EXEC,
 		.jim_handler = jim_target_array2mem,
 		.help = "Writes Tcl array of 8/16/32 bit numbers "
@@ -5441,15 +5788,6 @@ static int target_create(Jim_GetOptInfo *goi)
 			/* found */
 			break;
 		}
-
-		/* check for deprecated name */
-		if (target_types[x]->deprecated_name) {
-			if (0 == strcmp(cp, target_types[x]->deprecated_name)) {
-				/* found */
-				LOG_WARNING("target name is deprecated use: \'%s\'", target_types[x]->name);
-				break;
-			}
-		}
 	}
 	if (target_types[x] == NULL) {
 		Jim_SetResultFormatted(goi->interp, "Unknown target type %s, try one of ", cp);
@@ -5471,17 +5809,23 @@ static int target_create(Jim_GetOptInfo *goi)
 
 	/* Create it */
 	target = calloc(1, sizeof(struct target));
+	if (!target) {
+		LOG_ERROR("Out of memory");
+		return JIM_ERR;
+	}
+
 	/* set target number */
 	target->target_number = new_target_number();
-	cmd_ctx->current_target = target;
 
 	/* allocate memory for each unique target type */
-	target->type = calloc(1, sizeof(struct target_type));
+	target->type = malloc(sizeof(struct target_type));
+	if (!target->type) {
+		LOG_ERROR("Out of memory");
+		free(target);
+		return JIM_ERR;
+	}
 
 	memcpy(target->type, target_types[x], sizeof(struct target_type));
-
-	/* will be set by "-endian" */
-	target->endianness = TARGET_ENDIAN_UNKNOWN;
 
 	/* default to first core, override with -coreid */
 	target->coreid = 0;
@@ -5505,6 +5849,12 @@ static int target_create(Jim_GetOptInfo *goi)
 
 	/* initialize trace information */
 	target->trace_info = calloc(1, sizeof(struct trace));
+	if (!target->trace_info) {
+		LOG_ERROR("Out of memory");
+		free(target->type);
+		free(target);
+		return JIM_ERR;
+	}
 
 	target->dbgmsg          = NULL;
 	target->dbg_msg_enabled = 0;
@@ -5515,6 +5865,7 @@ static int target_create(Jim_GetOptInfo *goi)
 	target->rtos_auto_detect = false;
 
 	target->gdb_port_override = NULL;
+	target->gdb_max_connections = 1;
 
 	/* Do the rest as "configure" options */
 	goi->isconfigure = 1;
@@ -5538,7 +5889,9 @@ static int target_create(Jim_GetOptInfo *goi)
 	}
 
 	if (e != JIM_OK) {
+		rtos_destroy(target);
 		free(target->gdb_port_override);
+		free(target->trace_info);
 		free(target->type);
 		free(target);
 		return e;
@@ -5551,14 +5904,25 @@ static int target_create(Jim_GetOptInfo *goi)
 
 	cp = Jim_GetString(new_cmd, NULL);
 	target->cmd_name = strdup(cp);
+	if (!target->cmd_name) {
+		LOG_ERROR("Out of memory");
+		rtos_destroy(target);
+		free(target->gdb_port_override);
+		free(target->trace_info);
+		free(target->type);
+		free(target);
+		return JIM_ERR;
+	}
 
 	if (target->type->target_create) {
 		e = (*(target->type->target_create))(target, goi->interp);
 		if (e != ERROR_OK) {
 			LOG_DEBUG("target_create failed");
-			free(target->gdb_port_override);
-			free(target->type);
 			free(target->cmd_name);
+			rtos_destroy(target);
+			free(target->gdb_port_override);
+			free(target->trace_info);
+			free(target->type);
 			free(target);
 			return JIM_ERR;
 		}
@@ -5569,15 +5933,6 @@ static int target_create(Jim_GetOptInfo *goi)
 		e = register_commands(cmd_ctx, NULL, target->type->commands);
 		if (ERROR_OK != e)
 			LOG_ERROR("unable to register '%s' commands", cp);
-	}
-
-	/* append to end of list */
-	{
-		struct target **tpp;
-		tpp = &(all_targets);
-		while (*tpp)
-			tpp = &((*tpp)->next);
-		*tpp = target;
 	}
 
 	/* now - create the new target name command */
@@ -5601,14 +5956,27 @@ static int target_create(Jim_GetOptInfo *goi)
 		COMMAND_REGISTRATION_DONE
 	};
 	e = register_commands(cmd_ctx, NULL, target_commands);
-	if (ERROR_OK != e)
+	if (e != ERROR_OK) {
+		if (target->type->deinit_target)
+			target->type->deinit_target(target);
+		free(target->cmd_name);
+		rtos_destroy(target);
+		free(target->gdb_port_override);
+		free(target->trace_info);
+		free(target->type);
+		free(target);
 		return JIM_ERR;
+	}
 
 	struct command *c = command_find_in_context(cmd_ctx, cp);
 	assert(c);
 	command_set_handler_data(c, target);
 
-	return (ERROR_OK == e) ? JIM_OK : JIM_ERR;
+	/* append to end of list */
+	append_to_list_all_targets(target);
+
+	cmd_ctx->current_target = target;
+	return JIM_OK;
 }
 
 static int jim_target_current(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
@@ -5620,7 +5988,9 @@ static int jim_target_current(Jim_Interp *interp, int argc, Jim_Obj *const *argv
 	struct command_context *cmd_ctx = current_command_context(interp);
 	assert(cmd_ctx != NULL);
 
-	Jim_SetResultString(interp, target_name(get_current_target(cmd_ctx)), -1);
+	struct target *target = get_current_target_or_null(cmd_ctx);
+	if (target)
+		Jim_SetResultString(interp, target_name(target), -1);
 	return JIM_OK;
 }
 
@@ -5667,7 +6037,7 @@ static int jim_target_smp(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 	retval = 0;
 	LOG_DEBUG("%d", argc);
 	/* argv[1] = target to associate in smp
-	 * argv[2] = target to assoicate in smp
+	 * argv[2] = target to associate in smp
 	 * argv[3] ...
 	 */
 
@@ -5841,11 +6211,8 @@ static struct FastLoad *fastload;
 static void free_fastload(void)
 {
 	if (fastload != NULL) {
-		int i;
-		for (i = 0; i < fastload_num; i++) {
-			if (fastload[i].data)
-				free(fastload[i].data);
-		}
+		for (int i = 0; i < fastload_num; i++)
+			free(fastload[i].data);
 		free(fastload);
 		fastload = NULL;
 	}
@@ -5858,7 +6225,6 @@ COMMAND_HANDLER(handle_fast_load_image_command)
 	uint32_t image_size;
 	target_addr_t min_address = 0;
 	target_addr_t max_address = -1;
-	int i;
 
 	struct image image;
 
@@ -5884,7 +6250,7 @@ COMMAND_HANDLER(handle_fast_load_image_command)
 		return ERROR_FAIL;
 	}
 	memset(fastload, 0, sizeof(struct FastLoad)*image.num_sections);
-	for (i = 0; i < image.num_sections; i++) {
+	for (unsigned int i = 0; i < image.num_sections; i++) {
 		buffer = malloc(image.sections[i].size);
 		if (buffer == NULL) {
 			command_print(CMD, "error allocating buffer for section (%d bytes)",
@@ -5902,7 +6268,7 @@ COMMAND_HANDLER(handle_fast_load_image_command)
 		uint32_t offset = 0;
 		uint32_t length = buf_cnt;
 
-		/* DANGER!!! beware of unsigned comparision here!!! */
+		/* DANGER!!! beware of unsigned comparison here!!! */
 
 		if ((image.sections[i].base_address + buf_cnt >= min_address) &&
 				(image.sections[i].base_address < max_address)) {
@@ -6356,7 +6722,7 @@ static const struct command_registration target_exec_command_handlers[] = {
 		.name = "halt",
 		.handler = handle_halt_command,
 		.mode = COMMAND_EXEC,
-		.help = "request target to halt, then wait up to the specified"
+		.help = "request target to halt, then wait up to the specified "
 			"number of milliseconds (default 5000) for it to complete",
 		.usage = "[milliseconds]",
 	},
@@ -6372,7 +6738,7 @@ static const struct command_registration target_exec_command_handlers[] = {
 		.handler = handle_reset_command,
 		.mode = COMMAND_EXEC,
 		.usage = "[run|halt|init]",
-		.help = "Reset all targets into the specified mode."
+		.help = "Reset all targets into the specified mode. "
 			"Default reset mode is run, if not given.",
 	},
 	{
@@ -6446,6 +6812,13 @@ static const struct command_registration target_exec_command_handlers[] = {
 		.usage = "['phys'] address value [count]",
 	},
 	{
+		.name = "mbatch",
+		.handler = handle_mbatch_command,
+		.mode = COMMAND_EXEC,
+		.help = "execute a batch of memory commands",
+		.usage = "[unique ID] [list of memory read/write requests]",
+	},
+	{
 		.name = "bp",
 		.handler = handle_bp_command,
 		.mode = COMMAND_EXEC,
@@ -6457,7 +6830,7 @@ static const struct command_registration target_exec_command_handlers[] = {
 		.handler = handle_rbp_command,
 		.mode = COMMAND_EXEC,
 		.help = "remove breakpoint",
-		.usage = "address",
+		.usage = "'all' | address",
 	},
 	{
 		.name = "wp",

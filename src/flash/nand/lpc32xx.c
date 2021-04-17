@@ -42,7 +42,7 @@ extern int nand_correct_data(struct nand_device *nand, u_char *dat,
  * read/write data to the SLC controller.
  * - DMA descriptors will be put at start of working area,
  * - Hardware generated ECC will be stored at ECC_OFFS
- * - OOB wil be read/written from/to SPARE_OFFS
+ * - OOB will be read/written from/to SPARE_OFFS
  * - Actual page data will be read from/to DATA_OFFS
  * There are unused holes between the used areas.
  */
@@ -60,14 +60,14 @@ static const int lp_ooblayout[] = {
 	58, 59, 60, 61, 62, 63
 };
 
-typedef struct {
+struct dmac_ll {
 	volatile uint32_t dma_src;
 	volatile uint32_t dma_dest;
 	volatile uint32_t next_lli;
 	volatile uint32_t next_ctrl;
-} dmac_ll_t;
+};
 
-static dmac_ll_t dmalist[(2048/256) * 2 + 1];
+static struct dmac_ll dmalist[(2048/256) * 2 + 1];
 
 /* nand device lpc32xx <target#> <oscillator_frequency>
  */
@@ -317,7 +317,7 @@ static int lpc32xx_init(struct nand_device *nand)
 		}
 
 		/* after reset set other registers of SLC,
-		 * so reset calling is here at the begining
+		 * so reset calling is here at the beginning
 		 */
 		retval = lpc32xx_reset(nand);
 		if (ERROR_OK != retval)
@@ -769,7 +769,7 @@ static int lpc32xx_make_dma_list(uint32_t target_mem_base, uint32_t page_size,
 	 * 2. Copy generated ECC data from Register to Spare Area
 	 * 3. X'fer next 256 bytes of data from Memory to Flash.
 	 * 4. Copy generated ECC data from Register to Spare Area.
-	 * 5. X'fer 16 byets of Spare area from Memory to Flash.
+	 * 5. X'fer 16 bytes of Spare area from Memory to Flash.
 	 * Read Operation Sequence for Small Block NAND
 	 * ----------------------------------------------------------
 	 * 1. X'fer 256 bytes of data from Flash to Memory.
@@ -779,13 +779,13 @@ static int lpc32xx_make_dma_list(uint32_t target_mem_base, uint32_t page_size,
 	 * 5. X'fer 16 bytes of Spare area from Flash to Memory.
 	 * Write Operation Sequence for Large Block NAND
 	 * ----------------------------------------------------------
-	 * 1. Steps(1-4) of Write Operations repeate for four times
+	 * 1. Steps(1-4) of Write Operations repeated for four times
 	 * which generates 16 DMA descriptors to X'fer 2048 bytes of
 	 * data & 32 bytes of ECC data.
 	 * 2. X'fer 64 bytes of Spare area from Memory to Flash.
 	 * Read Operation Sequence for Large Block NAND
 	 * ----------------------------------------------------------
-	 * 1. Steps(1-4) of Read Operations repeate for four times
+	 * 1. Steps(1-4) of Read Operations repeated for four times
 	 * which generates 16 DMA descriptors to X'fer 2048 bytes of
 	 * data & 32 bytes of ECC data.
 	 * 2. X'fer 64 bytes of Spare area from Flash to Memory.
@@ -842,7 +842,7 @@ static int lpc32xx_make_dma_list(uint32_t target_mem_base, uint32_t page_size,
 	 * 2. Copy generated ECC data from Register to Spare Area
 	 * 3. X'fer next 256 bytes of data from Memory to Flash.
 	 * 4. Copy generated ECC data from Register to Spare Area.
-	 * 5. X'fer 16 byets of Spare area from Memory to Flash.
+	 * 5. X'fer 16 bytes of Spare area from Memory to Flash.
 	 * Read Operation Sequence for Small Block NAND
 	 * ----------------------------------------------------------
 	 * 1. X'fer 256 bytes of data from Flash to Memory.
@@ -852,13 +852,13 @@ static int lpc32xx_make_dma_list(uint32_t target_mem_base, uint32_t page_size,
 	 * 5. X'fer 16 bytes of Spare area from Flash to Memory.
 	 * Write Operation Sequence for Large Block NAND
 	 * ----------------------------------------------------------
-	 * 1. Steps(1-4) of Write Operations repeate for four times
+	 * 1. Steps(1-4) of Write Operations repeated for four times
 	 * which generates 16 DMA descriptors to X'fer 2048 bytes of
 	 * data & 32 bytes of ECC data.
 	 * 2. X'fer 64 bytes of Spare area from Memory to Flash.
 	 * Read Operation Sequence for Large Block NAND
 	 * ----------------------------------------------------------
-	 * 1. Steps(1-4) of Read Operations repeate for four times
+	 * 1. Steps(1-4) of Read Operations repeated for four times
 	 * which generates 16 DMA descriptors to X'fer 2048 bytes of
 	 * data & 32 bytes of ECC data.
 	 * 2. X'fer 64 bytes of Spare area from Flash to Memory.
@@ -867,14 +867,14 @@ static int lpc32xx_make_dma_list(uint32_t target_mem_base, uint32_t page_size,
 		dmalist[i*2].dma_src = (do_read ? dmasrc : (dmasrc + i * 256));
 		dmalist[i*2].dma_dest = (do_read ? (dmadst + i * 256) : dmadst);
 		dmalist[i*2].next_lli =
-			target_mem_base + (i*2 + 1) * sizeof(dmac_ll_t);
+			target_mem_base + (i*2 + 1) * sizeof(struct dmac_ll);
 		dmalist[i*2].next_ctrl = ctrl;
 
 		dmalist[(i*2) + 1].dma_src = 0x20020034;/* SLC_ECC */
 		dmalist[(i*2) + 1].dma_dest =
 			target_mem_base + ECC_OFFS + i * 4;
 		dmalist[(i*2) + 1].next_lli =
-			target_mem_base + (i*2 + 2) * sizeof(dmac_ll_t);
+			target_mem_base + (i*2 + 2) * sizeof(struct dmac_ll);
 		dmalist[(i*2) + 1].next_ctrl = ecc_ctrl;
 
 	}
@@ -1044,7 +1044,7 @@ static int lpc32xx_write_page_slc(struct nand_device *nand,
 
 	target_mem_base = pworking_area->address;
 	/*
-	 * Skip writting page which has all 0xFF data as this will
+	 * Skip writing page which has all 0xFF data as this will
 	 * generate 0x0 value.
 	 */
 	if (data && !oob) {
@@ -1063,7 +1063,7 @@ static int lpc32xx_write_page_slc(struct nand_device *nand,
 	   XXX: Assumes host and target have same byte sex.
 	*/
 	retval = target_write_memory(target, target_mem_base, 4,
-			nll * sizeof(dmac_ll_t) / 4,
+			nll * sizeof(struct dmac_ll) / 4,
 			(uint8_t *)dmalist);
 	if (ERROR_OK != retval) {
 		LOG_ERROR("Could not write DMA descriptors to IRAM");
@@ -1102,9 +1102,9 @@ static int lpc32xx_write_page_slc(struct nand_device *nand,
 			return retval;
 		}
 
-		/* Write first decriptor to DMA controller */
+		/* Write first descriptor to DMA controller */
 		retval = target_write_memory(target, 0x31000100, 4,
-				sizeof(dmac_ll_t) / 4,
+				sizeof(struct dmac_ll) / 4,
 				(uint8_t *)dmalist);
 		if (ERROR_OK != retval) {
 			LOG_ERROR("Could not write DMA descriptor to DMAC");
@@ -1159,9 +1159,9 @@ static int lpc32xx_write_page_slc(struct nand_device *nand,
 		return retval;
 	}
 
-	/* Write OOB decriptor to DMA controller */
+	/* Write OOB descriptor to DMA controller */
 	retval = target_write_memory(target, 0x31000100, 4,
-			sizeof(dmac_ll_t) / 4,
+			sizeof(struct dmac_ll) / 4,
 			(uint8_t *)(&dmalist[nll-1]));
 	if (ERROR_OK != retval) {
 		LOG_ERROR("Could not write OOB DMA descriptor to DMAC");
@@ -1460,7 +1460,7 @@ static int lpc32xx_read_page_slc(struct nand_device *nand,
 	   XXX: Assumes host and target have same byte sex.
 	*/
 	retval = target_write_memory(target, target_mem_base, 4,
-			nll * sizeof(dmac_ll_t) / 4,
+			nll * sizeof(struct dmac_ll) / 4,
 			(uint8_t *)dmalist);
 	if (ERROR_OK != retval) {
 		LOG_ERROR("Could not write DMA descriptors to IRAM");
@@ -1487,9 +1487,9 @@ static int lpc32xx_read_page_slc(struct nand_device *nand,
 		return retval;
 	}
 
-	/* Write first decriptor to DMA controller */
+	/* Write first descriptor to DMA controller */
 	retval = target_write_memory(target, 0x31000100, 4,
-			sizeof(dmac_ll_t) / 4, (uint8_t *)dmalist);
+			sizeof(struct dmac_ll) / 4, (uint8_t *)dmalist);
 	if (ERROR_OK != retval) {
 		LOG_ERROR("Could not write DMA descriptor to DMAC");
 		return retval;

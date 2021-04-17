@@ -15,7 +15,9 @@ set(JAYLINK_VERSION_LIB_AGE 0)
 set(JAYLINK_VERSION_LIB "{$JAYLINK_VERSION_LIB_CURRENT}:{$JAYLINK_VERSION_LIB_REVISION}:{$JAYLINK_VERSION_LIB_AGE}")
 
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/drivers/libjaylink/libjaylink/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/jlink/version.h)
-add_library(ocdhla STATIC hla/hla_transport.c hla/hla_tcl.c hla/hla_interface.c hla/hla_layout.c)
+
+add_library(ocdhla STATIC ../${HLA_MULTICORE_PREFIX}/jtag/hla/hla_transport.c ../${HLA_MULTICORE_PREFIX}/jtag/hla/hla_tcl.c ../${HLA_MULTICORE_PREFIX}/jtag/hla/hla_interface.c ../${HLA_MULTICORE_PREFIX}/jtag/hla/hla_layout.c)
+
 add_library(ocdaice STATIC aice/aice_transport.c aice/aice_interface.c aice/aice_port.c aice/aice_usb.c aice/aice_pipe.c)
 add_library(ocdusbblaster STATIC drivers/usb_blaster/usb_blaster.c drivers/usb_blaster/ublast2_access_libusb.c)
 
@@ -36,16 +38,18 @@ add_library(ocdjtagdrivers STATIC
 	drivers/versaloon/versaloon.c
 	drivers/vsllink.c
 	drivers/arm-jtag-ew.c
-	drivers/stlink_usb.c
+	drivers/stlink_usb${HLA_MULTICORE_SUFFIX}.c
 	drivers/ti_icdi_usb.c
 	drivers/osbdm.c
 	drivers/kitprog.c
 	drivers/opendous.c
-	drivers/cmsis_dap_usb.c
+	drivers/cmsis_dap.c
+	drivers/cmsis_dap_usb_bulk.c
+	drivers/cmsis_dap_usb_hid.c
 	drivers/xds110.c
+	drivers/picoprobe.c
 	drivers/jtag_usb_common.c
 	drivers/libusb_helper.c)
-
 	
 add_library(ocdjlink STATIC
 	drivers/jlink.c
@@ -74,7 +78,7 @@ add_library(ocdjlink STATIC
 
 target_compile_definitions(ocdjlink PRIVATE HAVE_LIBUSB)
 	
-add_library(jtag STATIC adapter.c core.c interface.c interfaces.c tcl.c commands.c)
+add_library(jtag STATIC adapter.c core.c interface.c interfaces.c tcl.c commands.c swim.c)
 
 SET_TARGET_PROPERTIES(ocdjlink PROPERTIES COMPILE_FLAGS -I${CMAKE_CURRENT_BINARY_DIR}/jlink)
 

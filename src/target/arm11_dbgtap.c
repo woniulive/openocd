@@ -562,11 +562,7 @@ static const tap_state_t arm11_MOVE_DRPAUSE_IDLE_DRPAUSE_with_delay[] = {
 	TAP_DRSHIFT
 };
 
-/* This inner loop can be implemented by the minidriver, oftentimes in hardware... The
- * minidriver can call the default implementation as a fallback or implement it
- * from scratch.
- */
-int arm11_run_instr_data_to_core_noack_inner_default(struct jtag_tap *tap,
+static int arm11_run_instr_data_to_core_noack_inner(struct jtag_tap *tap,
 	uint32_t opcode,
 	uint32_t *data,
 	size_t count)
@@ -628,21 +624,6 @@ int arm11_run_instr_data_to_core_noack_inner_default(struct jtag_tap *tap,
 
 	return retval;
 }
-
-int arm11_run_instr_data_to_core_noack_inner(struct jtag_tap *tap,
-					     uint32_t opcode,
-					     uint32_t *data,
-					     size_t count);
-
-#ifndef HAVE_JTAG_MINIDRIVER_H
-int arm11_run_instr_data_to_core_noack_inner(struct jtag_tap *tap,
-	uint32_t opcode,
-	uint32_t *data,
-	size_t count)
-{
-	return arm11_run_instr_data_to_core_noack_inner_default(tap, opcode, data, count);
-}
-#endif
 
 /** Execute one instruction via ITR repeatedly while
  *  passing data to the core via DTR on each execution.
@@ -1183,7 +1164,7 @@ int arm11_dpm_init(struct arm11_common *arm11, uint32_t didr)
 
 	/* alloc enough to enable all breakpoints and watchpoints at once */
 	arm11->bpwp_actions = calloc(2 * (dpm->nbp + dpm->nwp),
-			sizeof *arm11->bpwp_actions);
+			sizeof(*arm11->bpwp_actions));
 	if (!arm11->bpwp_actions)
 		return ERROR_FAIL;
 
@@ -1192,4 +1173,14 @@ int arm11_dpm_init(struct arm11_common *arm11, uint32_t didr)
 		return retval;
 
 	return arm11_bpwp_flush(arm11);
+}
+
+void arm11_dpm_deinit(struct arm11_common *arm11)
+{
+	struct arm_dpm *dpm = &arm11->dpm;
+
+	free(arm11->bpwp_actions);
+	arm_free_reg_cache(dpm->arm);
+	free(dpm->dbp);
+	free(dpm->dwp);
 }

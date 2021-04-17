@@ -237,7 +237,7 @@ static int parport_get_giveio_access(void)
 	HANDLE h;
 	OSVERSIONINFO version;
 
-	version.dwOSVersionInfoSize = sizeof version;
+	version.dwOSVersionInfoSize = sizeof(version);
 	if (!GetVersionEx(&version)) {
 		errno = EINVAL;
 		return -1;
@@ -392,10 +392,8 @@ static int parport_quit(void)
 		parport_write_data();
 	}
 
-	if (parport_cable) {
-		free(parport_cable);
-		parport_cable = NULL;
-	}
+	free(parport_cable);
+	parport_cable = NULL;
 
 	return ERROR_OK;
 }

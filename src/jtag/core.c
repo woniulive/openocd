@@ -209,7 +209,7 @@ unsigned jtag_tap_count_enabled(void)
 }
 
 /** Append a new TAP to the chain of all taps. */
-void jtag_tap_add(struct jtag_tap *t)
+static void jtag_tap_add(struct jtag_tap *t)
 {
 	unsigned jtag_num_taps = 0;
 
@@ -426,7 +426,6 @@ static void jtag_add_scan_check(struct jtag_tap *active, void (*jtag_add_scan)(
 
 	for (int i = 0; i < in_num_fields; i++) {
 		if ((in_fields[i].check_value != NULL) && (in_fields[i].in_value != NULL)) {
-			/* this is synchronous for a minidriver */
 			jtag_add_callback4(jtag_check_value_mask_callback,
 				(jtag_callback_data_t)in_fields[i].in_value,
 				(jtag_callback_data_t)in_fields[i].check_value,
@@ -891,8 +890,8 @@ static int jtag_check_value_inner(uint8_t *captured, uint8_t *in_check_value,
 
 		/* NOTE:  we've lost diagnostic context here -- 'which tap' */
 
-		captured_str = buf_to_str(captured, bits, 16);
-		in_check_value_str = buf_to_str(in_check_value, bits, 16);
+		captured_str = buf_to_hex_str(captured, bits);
+		in_check_value_str = buf_to_hex_str(in_check_value, bits);
 
 		LOG_WARNING("Bad value '%s' captured during DR or IR scan:",
 			captured_str);
@@ -904,7 +903,7 @@ static int jtag_check_value_inner(uint8_t *captured, uint8_t *in_check_value,
 		if (in_check_mask) {
 			char *in_check_mask_str;
 
-			in_check_mask_str = buf_to_str(in_check_mask, bits, 16);
+			in_check_mask_str = buf_to_hex_str(in_check_mask, bits);
 			LOG_WARNING(" check_mask: 0x%s", in_check_mask_str);
 			free(in_check_mask_str);
 		}
@@ -953,14 +952,8 @@ int default_interface_jtag_execute_queue(void)
 
 	int result = jtag->jtag_ops->execute_queue();
 
-#if !BUILD_ZY1000
-	/* Only build this if we use a regular driver with a command queue.
-	 * Otherwise jtag_command_queue won't be found at compile/link time. Its
-	 * definition is in jtag/commands.c, which is only built/linked by
-	 * jtag/Makefile.am if MINIDRIVER_DUMMY || !MINIDRIVER, but those variables
-	 * aren't accessible here. */
 	struct jtag_command *cmd = jtag_command_queue;
-	while (debug_level >= LOG_LVL_DEBUG && cmd) {
+	while (debug_level >= LOG_LVL_DEBUG_IO && cmd) {
 		switch (cmd->type) {
 			case JTAG_SCAN:
 				LOG_DEBUG_IO("JTAG %s SCAN to %s",
@@ -969,12 +962,12 @@ int default_interface_jtag_execute_queue(void)
 				for (int i = 0; i < cmd->cmd.scan->num_fields; i++) {
 					struct scan_field *field = cmd->cmd.scan->fields + i;
 					if (field->out_value) {
-						char *str = buf_to_str(field->out_value, field->num_bits, 16);
+						char *str = buf_to_hex_str(field->out_value, field->num_bits);
 						LOG_DEBUG_IO("  %db out: %s", field->num_bits, str);
 						free(str);
 					}
 					if (field->in_value) {
-						char *str = buf_to_str(field->in_value, field->num_bits, 16);
+						char *str = buf_to_hex_str(field->in_value, field->num_bits);
 						LOG_DEBUG_IO("  %db  in: %s", field->num_bits, str);
 						free(str);
 					}
@@ -1017,7 +1010,6 @@ int default_interface_jtag_execute_queue(void)
 		}
 		cmd = cmd->next;
 	}
-#endif
 
 	return result;
 }
@@ -1233,7 +1225,7 @@ static int jtag_examine_chain(void)
 	/* Add room for end-of-chain marker. */
 	max_taps++;
 
-	uint8_t *idcode_buffer = malloc(max_taps * 4);
+	uint8_t *idcode_buffer = calloc(4, max_taps);
 	if (idcode_buffer == NULL)
 		return ERROR_JTAG_INIT_FAILED;
 
@@ -1269,7 +1261,7 @@ static int jtag_examine_chain(void)
 			 * REVISIT create a jtag_alloc(chip, tap) routine, and
 			 * share it with jim_newtap_cmd().
 			 */
-			tap = calloc(1, sizeof *tap);
+			tap = calloc(1, sizeof(*tap));
 			if (!tap) {
 				retval = ERROR_FAIL;
 				goto out;
@@ -1290,7 +1282,7 @@ static int jtag_examine_chain(void)
 
 		if ((idcode & 1) == 0) {
 			/* Zero for LSB indicates a device in bypass */
-			LOG_INFO("TAP %s does not have valid IDCODE (idcode=0x%x)",
+			LOG_INFO("TAP %s does not have valid IDCODE (idcode=0x%" PRIx32 ")",
 					tap->dotted_name, idcode);
 			tap->hasidcode = false;
 			tap->idcode = 0;
@@ -1406,7 +1398,7 @@ static int jtag_validate_ircapture(void)
 					&& tap->ir_length < JTAG_IRLEN_MAX) {
 				tap->ir_length++;
 			}
-			LOG_WARNING("AUTO %s - use \"jtag newtap " "%s %s -irlen %d "
+			LOG_WARNING("AUTO %s - use \"jtag newtap %s %s -irlen %d "
 					"-expected-id 0x%08" PRIx32 "\"",
 					tap->dotted_name, tap->chip, tap->tapname, tap->ir_length, tap->idcode);
 		}
@@ -1436,7 +1428,7 @@ static int jtag_validate_ircapture(void)
 	/* verify the '11' sentinel we wrote is returned at the end */
 	val = buf_get_u64(ir_test, chain_pos, 2);
 	if (val != 0x3) {
-		char *cbuf = buf_to_str(ir_test, total_ir_length, 16);
+		char *cbuf = buf_to_hex_str(ir_test, total_ir_length);
 
 		LOG_ERROR("IR capture error at bit %d, saw 0x%s not 0x...3",
 			chain_pos, cbuf);
@@ -1872,7 +1864,7 @@ void jtag_set_verify(bool enable)
 	jtag_verify = enable;
 }
 
-bool jtag_will_verify()
+bool jtag_will_verify(void)
 {
 	return jtag_verify;
 }
@@ -1882,7 +1874,7 @@ void jtag_set_verify_capture_ir(bool enable)
 	jtag_verify_capture_ir = enable;
 }
 
-bool jtag_will_verify_capture_ir()
+bool jtag_will_verify_capture_ir(void)
 {
 	return jtag_verify_capture_ir;
 }
@@ -2020,8 +2012,15 @@ int adapter_resets(int trst, int srst)
 
 		/* adapters without trst signal will eventually use tlr sequence */
 		jtag_add_reset(trst, srst);
+		/*
+		 * The jtag queue is still used for reset by some adapter. Flush it!
+		 * FIXME: To be removed when all adapter drivers will be updated!
+		 */
+		jtag_execute_queue();
 		return ERROR_OK;
-	} else if (transport_is_swd() || transport_is_hla()) {
+	} else if (transport_is_swd() || transport_is_hla() ||
+			   transport_is_dapdirect_swd() || transport_is_dapdirect_jtag() ||
+			   transport_is_swim()) {
 		if (trst == TRST_ASSERT) {
 			LOG_ERROR("transport %s has no trst signal",
 				get_current_transport()->name);
@@ -2054,7 +2053,8 @@ int adapter_assert_reset(void)
 			jtag_add_reset(0, 1);
 		return ERROR_OK;
 	} else if (transport_is_swd() || transport_is_hla() ||
-			   transport_is_dapdirect_jtag() || transport_is_dapdirect_swd())
+			   transport_is_dapdirect_jtag() || transport_is_dapdirect_swd() ||
+			   transport_is_swim())
 		return adapter_system_reset(1);
 	else if (get_current_transport() != NULL)
 		LOG_ERROR("reset is not supported on %s",
@@ -2070,7 +2070,8 @@ int adapter_deassert_reset(void)
 		jtag_add_reset(0, 0);
 		return ERROR_OK;
 	} else if (transport_is_swd() || transport_is_hla() ||
-			 transport_is_dapdirect_jtag() || transport_is_dapdirect_swd())
+			   transport_is_dapdirect_jtag() || transport_is_dapdirect_swd() ||
+			   transport_is_swim())
 		return adapter_system_reset(0);
 	else if (get_current_transport() != NULL)
 		LOG_ERROR("reset is not supported on %s",

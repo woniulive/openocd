@@ -245,8 +245,8 @@ static int arm920t_read_cp15_interpreted(struct target *target,
 	uint32_t cp15_opcode, uint32_t address, uint32_t *value)
 {
 	struct arm *arm = target_to_arm(target);
-	uint32_t *regs_p[1];
-	uint32_t regs[2];
+	uint32_t *regs_p[16];
+	uint32_t regs[16];
 	uint32_t cp15c15 = 0x0;
 	struct reg *r = arm->core_cache->reg_list;
 
@@ -295,7 +295,7 @@ int arm920t_write_cp15_interpreted(struct target *target,
 {
 	uint32_t cp15c15 = 0x0;
 	struct arm *arm = target_to_arm(target);
-	uint32_t regs[2];
+	uint32_t regs[16];
 	struct reg *r = arm->core_cache->reg_list;
 
 	/* load value, address into R0, R1 */
@@ -484,7 +484,7 @@ int arm920t_post_debug_entry(struct target *target)
 /* EXPORTED to FA256 */
 void arm920t_pre_restore_context(struct target *target)
 {
-	uint32_t cp15c15;
+	uint32_t cp15c15 = 0;
 	struct arm920t_common *arm920t = target_to_arm920(target);
 
 	/* restore i/d fault status and address register */
@@ -850,6 +850,16 @@ static int arm920t_target_create(struct target *target, Jim_Interp *interp)
 
 	arm920t = calloc(1, sizeof(struct arm920t_common));
 	return arm920t_init_arch_info(target, arm920t, target->tap);
+}
+
+static void arm920t_deinit_target(struct target *target)
+{
+	struct arm *arm = target_to_arm(target);
+	struct arm920t_common *arm920t = target_to_arm920(target);
+
+	arm7_9_deinit(target);
+	arm_free_reg_cache(arm);
+	free(arm920t);
 }
 
 COMMAND_HANDLER(arm920t_handle_read_cache_command)
@@ -1501,80 +1511,6 @@ COMMAND_HANDLER(arm920t_handle_cp15_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(arm920t_handle_cp15i_command)
-{
-	int retval;
-	struct target *target = get_current_target(CMD_CTX);
-	struct arm920t_common *arm920t = target_to_arm920(target);
-
-	retval = arm920t_verify_pointer(CMD, arm920t);
-	if (retval != ERROR_OK)
-		return retval;
-
-
-	if (target->state != TARGET_HALTED) {
-		command_print(CMD, "target must be stopped for "
-			"\"%s\" command", CMD_NAME);
-		return ERROR_OK;
-	}
-
-	/* one argument, read a register.
-	 * two arguments, write it.
-	 */
-	if (CMD_ARGC >= 1) {
-		uint32_t opcode;
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], opcode);
-
-		if (CMD_ARGC == 1) {
-			uint32_t value;
-			retval = arm920t_read_cp15_interpreted(target,
-					opcode, 0x0, &value);
-			if (retval != ERROR_OK) {
-				command_print(CMD,
-					"couldn't execute %8.8" PRIx32,
-					opcode);
-				/* REVISIT why lie? "return retval"? */
-				return ERROR_OK;
-			}
-
-			command_print(CMD, "%8.8" PRIx32 ": %8.8" PRIx32,
-				opcode, value);
-		} else if (CMD_ARGC == 2) {
-			uint32_t value;
-			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], value);
-			retval = arm920t_write_cp15_interpreted(target,
-					opcode, value, 0);
-			if (retval != ERROR_OK) {
-				command_print(CMD,
-					"couldn't execute %8.8" PRIx32,
-					opcode);
-				/* REVISIT why lie? "return retval"? */
-				return ERROR_OK;
-			}
-			command_print(CMD, "%8.8" PRIx32 ": %8.8" PRIx32,
-				opcode, value);
-		} else if (CMD_ARGC == 3) {
-			uint32_t value;
-			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], value);
-			uint32_t address;
-			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], address);
-			retval = arm920t_write_cp15_interpreted(target,
-					opcode, value, address);
-			if (retval != ERROR_OK) {
-				command_print(CMD,
-					"couldn't execute %8.8" PRIx32, opcode);
-				/* REVISIT why lie? "return retval"? */
-				return ERROR_OK;
-			}
-			command_print(CMD, "%8.8" PRIx32 ": %8.8" PRIx32
-				" %8.8" PRIx32, opcode, value, address);
-		}
-	} else
-		return ERROR_COMMAND_SYNTAX_ERROR;
-
-	return ERROR_OK;
-}
-
 COMMAND_HANDLER(arm920t_handle_cache_info_command)
 {
 	int retval;
@@ -1629,15 +1565,6 @@ static const struct command_registration arm920t_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.help = "display/modify cp15 register",
 		.usage = "regnum [value]",
-	},
-	{
-		.name = "cp15i",
-		.handler = arm920t_handle_cp15i_command,
-		.mode = COMMAND_EXEC,
-		/* prefer using less error-prone "arm mcr" or "arm mrc" */
-		.help = "display/modify cp15 register using ARM opcode"
-			" (DEPRECATED)",
-		.usage = "instruction [value [address]]",
 	},
 	{
 		.name = "cache_info",
@@ -1716,6 +1643,7 @@ struct target_type arm920t_target = {
 	.commands = arm920t_command_handlers,
 	.target_create = arm920t_target_create,
 	.init_target = arm9tdmi_init_target,
+	.deinit_target = arm920t_deinit_target,
 	.examine = arm7_9_examine,
 	.check_reset = arm7_9_check_reset,
 };

@@ -35,6 +35,7 @@ add_library(target
 	arm_jtag.c
 	arm_semihosting.c
 	arm_simulator.c
+	arm_tpiu_swo.c
 	avr32_ap7k.c
 	avr32_jtag.c
 	avr32_mem.c
@@ -52,7 +53,7 @@ add_library(target
 	etm_dummy.c
 	fa526.c
 	feroceon.c
-	hla_target.c
+	hla_target${HLA_MULTICORE_SUFFIX}.c
 	image.c
 	lakemont.c
 	ls1_sap.c
@@ -74,6 +75,7 @@ add_library(target
 	quark_d20xx.c
 	quark_x10xx.c
 	register.c
+	rtt.c
 	smp.c
 	target.c
 	target_request.c
@@ -82,7 +84,8 @@ add_library(target
 	x86_32_common.c
 	xscale.c
 	aarch64.c
-	stm8.c
+	a64_disassembler.c
+	stm8${HLA_MULTICORE_SUFFIX}.c
 	arm_dap.c
 	semihosting_common.c
 	riscv/batch.c

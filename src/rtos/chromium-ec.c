@@ -306,7 +306,7 @@ static int chromium_ec_update_threads(struct rtos *rtos)
 			LOG_ERROR("Failed to get task %d's runtime", t);
 		runtime =  target_buffer_get_u64(rtos->target, runtime_buf);
 
-		/* Priority is simply the positon in the array */
+		/* Priority is simply the position in the array */
 		if (thread_ptr == current_task)
 			snprintf(thread_str_buf, sizeof(thread_str_buf),
 				 "State: Running, Priority: %u, Events: %" PRIx32 ", Runtime: %" PRIu64 "\n",
@@ -360,12 +360,12 @@ static int chromium_ec_get_thread_reg_list(struct rtos *rtos,
 				       stack_ptr, reg_list, num_regs);
 }
 
-static int chromium_ec_get_symbol_list_to_lookup(symbol_table_elem_t *symbol_list[])
+static int chromium_ec_get_symbol_list_to_lookup(struct symbol_table_elem *symbol_list[])
 {
 	size_t s;
 
 	*symbol_list = calloc(ARRAY_SIZE(chromium_ec_symbol_list),
-			      sizeof(symbol_table_elem_t));
+			      sizeof(struct symbol_table_elem));
 	if (!(*symbol_list)) {
 		LOG_ERROR("Chromium-EC: out of memory");
 		return ERROR_FAIL;

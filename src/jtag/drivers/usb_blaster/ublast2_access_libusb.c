@@ -45,7 +45,7 @@ static int ublast2_libusb_read(struct ublast_lowlevel *low, uint8_t *buf,
 	int ret, tmp = 0;
 
 	ret = jtag_libusb_bulk_read(low->libusb_dev,
-					    USBBLASTER_EPIN | \
+					    USBBLASTER_EPIN |
 					    LIBUSB_ENDPOINT_IN,
 					    (char *)buf,
 					    size,
@@ -61,7 +61,7 @@ static int ublast2_libusb_write(struct ublast_lowlevel *low, uint8_t *buf,
 	int ret, tmp = 0;
 
 	ret = jtag_libusb_bulk_write(low->libusb_dev,
-						USBBLASTER_EPOUT | \
+						USBBLASTER_EPOUT |
 						LIBUSB_ENDPOINT_OUT,
 						(char *)buf,
 						size,
@@ -106,7 +106,7 @@ static int ublast2_write_firmware_section(struct libusb_device_handle *libusb_de
 			chunk_size = bytes_remaining;
 
 		jtag_libusb_control_transfer(libusb_dev,
-					     LIBUSB_REQUEST_TYPE_VENDOR | \
+					     LIBUSB_REQUEST_TYPE_VENDOR |
 					     LIBUSB_ENDPOINT_OUT,
 					     USBBLASTER_CTRL_LOAD_FIRM,
 					     addr,
@@ -133,13 +133,18 @@ static int load_usb_blaster_firmware(struct libusb_device_handle *libusb_dev,
 		return ERROR_FAIL;
 	}
 
+	if (libusb_claim_interface(libusb_dev, 0)) {
+		LOG_ERROR("unable to claim interface");
+		return ERROR_JTAG_INIT_FAILED;
+	}
+
 	ublast2_firmware_image.base_address = 0;
-	ublast2_firmware_image.base_address_set = 0;
+	ublast2_firmware_image.base_address_set = false;
 
 	int ret = image_open(&ublast2_firmware_image, low->firmware_path, "ihex");
 	if (ret != ERROR_OK) {
 		LOG_ERROR("Could not load firmware image");
-		return ret;
+		goto error_release_usb;
 	}
 
 	/** A host loader program must write 0x01 to the CPUCS register
@@ -152,7 +157,7 @@ static int load_usb_blaster_firmware(struct libusb_device_handle *libusb_dev,
 
 	char value = CPU_RESET;
 	jtag_libusb_control_transfer(libusb_dev,
-				     LIBUSB_REQUEST_TYPE_VENDOR | \
+				     LIBUSB_REQUEST_TYPE_VENDOR |
 				     LIBUSB_ENDPOINT_OUT,
 				     USBBLASTER_CTRL_LOAD_FIRM,
 				     EZUSB_CPUCS,
@@ -162,18 +167,18 @@ static int load_usb_blaster_firmware(struct libusb_device_handle *libusb_dev,
 				     100);
 
 	/* Download all sections in the image to ULINK */
-	for (int i = 0; i < ublast2_firmware_image.num_sections; i++) {
+	for (unsigned int i = 0; i < ublast2_firmware_image.num_sections; i++) {
 		ret = ublast2_write_firmware_section(libusb_dev,
 						     &ublast2_firmware_image, i);
 		if (ret != ERROR_OK) {
 			LOG_ERROR("Error while downloading the firmware");
-			return ret;
+			goto error_close_firmware;
 		}
 	}
 
 	value = !CPU_RESET;
 	jtag_libusb_control_transfer(libusb_dev,
-				     LIBUSB_REQUEST_TYPE_VENDOR | \
+				     LIBUSB_REQUEST_TYPE_VENDOR |
 				     LIBUSB_ENDPOINT_OUT,
 				     USBBLASTER_CTRL_LOAD_FIRM,
 				     EZUSB_CPUCS,
@@ -182,9 +187,18 @@ static int load_usb_blaster_firmware(struct libusb_device_handle *libusb_dev,
 				     1,
 				     100);
 
+error_close_firmware:
 	image_close(&ublast2_firmware_image);
 
-	return ERROR_OK;
+error_release_usb:
+	/*
+	 * Release claimed interface. Most probably it is already disconnected
+	 * and re-enumerated as new devices after firmware upload, so we do
+	 * not need to care about errors.
+	 */
+	libusb_release_interface(libusb_dev, 0);
+
+	return ret;
 }
 
 static int ublast2_libusb_init(struct ublast_lowlevel *low)
@@ -195,7 +209,7 @@ static int ublast2_libusb_init(struct ublast_lowlevel *low)
 	bool renumeration = false;
 	int ret;
 
-	if (jtag_libusb_open(vids, pids, NULL, &temp) == ERROR_OK) {
+	if (jtag_libusb_open(vids, pids, NULL, &temp, NULL) == ERROR_OK) {
 		LOG_INFO("Altera USB-Blaster II (uninitialized) found");
 		LOG_INFO("Loading firmware...");
 		ret = load_usb_blaster_firmware(temp, low);
@@ -209,15 +223,17 @@ static int ublast2_libusb_init(struct ublast_lowlevel *low)
 	const uint16_t pids_renum[] = { low->ublast_pid, 0 };
 
 	if (renumeration == false) {
-		if (jtag_libusb_open(vids_renum, pids_renum, NULL, &low->libusb_dev) != ERROR_OK) {
+		if (jtag_libusb_open(vids_renum, pids_renum, NULL,
+				&low->libusb_dev, NULL) != ERROR_OK) {
 			LOG_ERROR("Altera USB-Blaster II not found");
 			return ERROR_FAIL;
 		}
 	} else {
 		int retry = 10;
-		while (jtag_libusb_open(vids_renum, pids_renum, NULL, &low->libusb_dev) != ERROR_OK && retry--) {
+		while (jtag_libusb_open(vids_renum, pids_renum, NULL,
+				&low->libusb_dev, NULL) != ERROR_OK && retry--) {
 			usleep(1000000);
-			LOG_INFO("Waiting for renumerate...");
+			LOG_INFO("Waiting for reenumerate...");
 		}
 
 		if (!retry) {
@@ -226,9 +242,15 @@ static int ublast2_libusb_init(struct ublast_lowlevel *low)
 		}
 	}
 
+	if (libusb_claim_interface(low->libusb_dev, 0)) {
+		LOG_ERROR("unable to claim interface");
+		jtag_libusb_close(low->libusb_dev);
+		return ERROR_JTAG_INIT_FAILED;
+	}
+
 	char buffer[5];
 	jtag_libusb_control_transfer(low->libusb_dev,
-				     LIBUSB_REQUEST_TYPE_VENDOR | \
+				     LIBUSB_REQUEST_TYPE_VENDOR |
 				     LIBUSB_ENDPOINT_IN,
 				     USBBLASTER_CTRL_READ_REV,
 				     0,
@@ -244,6 +266,9 @@ static int ublast2_libusb_init(struct ublast_lowlevel *low)
 
 static int ublast2_libusb_quit(struct ublast_lowlevel *low)
 {
+	if (libusb_release_interface(low->libusb_dev, 0))
+		LOG_ERROR("usb release interface failed");
+
 	jtag_libusb_close(low->libusb_dev);
 	return ERROR_OK;
 };

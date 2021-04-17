@@ -165,7 +165,7 @@ static int vsllink_execute_queue(void)
 				break;
 
 			case JTAG_SLEEP:
-				LOG_DEBUG_IO("sleep %i", cmd->cmd.sleep->us);
+				LOG_DEBUG_IO("sleep %" PRIu32, cmd->cmd.sleep->us);
 				vsllink_tap_execute();
 				jtag_sleep(cmd->cmd.sleep->us);
 				break;
@@ -245,18 +245,14 @@ static int vsllink_speed_div(int jtag_speed, int *khz)
 
 static void vsllink_free_buffer(void)
 {
-	if (tdi_buffer != NULL) {
-		free(tdi_buffer);
-		tdi_buffer = NULL;
-	}
-	if (tdo_buffer != NULL) {
-		free(tdo_buffer);
-		tdo_buffer = NULL;
-	}
-	if (tms_buffer != NULL) {
-		free(tms_buffer);
-		tms_buffer = NULL;
-	}
+	free(tdi_buffer);
+	tdi_buffer = NULL;
+
+	free(tdo_buffer);
+	tdo_buffer = NULL;
+
+	free(tms_buffer);
+	tms_buffer = NULL;
 }
 
 static int vsllink_quit(void)
@@ -292,7 +288,7 @@ static int vsllink_interface_init(void)
 	libusb_init(&vsllink_handle->libusb_ctx);
 
 	if (ERROR_OK != vsllink_usb_open(vsllink_handle)) {
-		LOG_ERROR("Can't find USB JTAG Interface!" \
+		LOG_ERROR("Can't find USB JTAG Interface!"
 			"Please check connection and permissions.");
 		return ERROR_JTAG_INIT_FAILED;
 	}
@@ -676,8 +672,7 @@ static int vsllink_jtag_execute(void)
 					return ERROR_JTAG_QUEUE_FAILED;
 				}
 
-				if (pending_scan_result->buffer != NULL)
-					free(pending_scan_result->buffer);
+				free(pending_scan_result->buffer);
 			}
 		}
 	} else {

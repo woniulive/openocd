@@ -89,6 +89,8 @@ extern int gdb_actual_connections;
  * Initialize common semihosting support.
  *
  * @param target Pointer to the target to initialize.
+ * @param setup
+ * @param post_result
  * @return An error status if there is a problem during initialization.
  */
 int semihosting_common_init(struct target *target, void *setup,
@@ -145,7 +147,7 @@ int semihosting_common(struct target *target)
 {
 	struct semihosting *semihosting = target->semihosting;
 	if (!semihosting) {
-		/* Silently ignore if the semhosting field was not set. */
+		/* Silently ignore if the semihosting field was not set. */
 		return ERROR_OK;
 	}
 
@@ -345,7 +347,7 @@ int semihosting_common(struct target *target)
 							"semihosting: *** application exited normally ***\n");
 					}
 				} else if (semihosting->param == ADP_STOPPED_RUN_TIME_ERROR) {
-					/* Chosen more or less arbitrarly to have a nicer message,
+					/* Chosen more or less arbitrarily to have a nicer message,
 					 * otherwise all other return the same exit code 1. */
 					if (!gdb_actual_connections)
 						exit(1);
@@ -1461,7 +1463,7 @@ static void semihosting_set_field(struct target *target, uint64_t value,
 /* -------------------------------------------------------------------------
  * Common semihosting commands handlers. */
 
-__COMMAND_HANDLER(handle_common_semihosting_command)
+static __COMMAND_HANDLER(handle_common_semihosting_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 
@@ -1502,8 +1504,7 @@ __COMMAND_HANDLER(handle_common_semihosting_command)
 	return ERROR_OK;
 }
 
-
-__COMMAND_HANDLER(handle_common_semihosting_fileio_command)
+static __COMMAND_HANDLER(handle_common_semihosting_fileio_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 
@@ -1533,7 +1534,7 @@ __COMMAND_HANDLER(handle_common_semihosting_fileio_command)
 	return ERROR_OK;
 }
 
-__COMMAND_HANDLER(handle_common_semihosting_cmdline)
+static __COMMAND_HANDLER(handle_common_semihosting_cmdline)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	unsigned int i;
@@ -1566,7 +1567,7 @@ __COMMAND_HANDLER(handle_common_semihosting_cmdline)
 	return ERROR_OK;
 }
 
-__COMMAND_HANDLER(handle_common_semihosting_resumable_exit_command)
+static __COMMAND_HANDLER(handle_common_semihosting_resumable_exit_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 
@@ -1595,3 +1596,35 @@ __COMMAND_HANDLER(handle_common_semihosting_resumable_exit_command)
 
 	return ERROR_OK;
 }
+
+const struct command_registration semihosting_common_handlers[] = {
+	{
+		"semihosting",
+		.handler = handle_common_semihosting_command,
+		.mode = COMMAND_EXEC,
+		.usage = "['enable'|'disable']",
+		.help = "activate support for semihosting operations",
+	},
+	{
+		"semihosting_cmdline",
+		.handler = handle_common_semihosting_cmdline,
+		.mode = COMMAND_EXEC,
+		.usage = "arguments",
+		.help = "command line arguments to be passed to program",
+	},
+	{
+		"semihosting_fileio",
+		.handler = handle_common_semihosting_fileio_command,
+		.mode = COMMAND_EXEC,
+		.usage = "['enable'|'disable']",
+		.help = "activate support for semihosting fileio operations",
+	},
+	{
+		"semihosting_resexit",
+		.handler = handle_common_semihosting_resumable_exit_command,
+		.mode = COMMAND_EXEC,
+		.usage = "['enable'|'disable']",
+		.help = "activate support for semihosting resumable exit",
+	},
+	COMMAND_REGISTRATION_DONE
+};

@@ -1,8 +1,42 @@
 <?xml version="1.0"?>
 <ArrayOfProgrammingInterface xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
 	<ProgrammingInterface>
+		<ID>raspberrypi-swd</ID>
+		<Name>Raspberry Pi SWD BitBang</Name>
+		<ScriptFile>interface/raspberrypi-swd.cfg</ScriptFile>
+		<Condition xsi:type="Not">
+			<Argument xsi:type="Equals">
+				<Expression>$$SYS:GDBSTUB_HOST$$</Expression>
+				<ExpectedValue/>
+			</Argument>
+		</Condition>
+	</ProgrammingInterface>
+	<ProgrammingInterface>
+		<ID>raspberrypi2-native</ID>
+		<Name>Raspberry Pi</Name>
+		<ScriptFile>interface/raspberrypi2-native.cfg</ScriptFile>
+		<Condition xsi:type="Not">
+			<Argument xsi:type="Equals">
+				<Expression>$$SYS:GDBSTUB_HOST$$</Expression>
+				<ExpectedValue/>
+			</Argument>
+		</Condition>
+	</ProgrammingInterface>
+	<ProgrammingInterface>
+		<ID>raspberrypi-native</ID>
+		<Name>Raspberry Pi (v1.0)</Name>
+		<ScriptFile>interface/raspberrypi-native.cfg</ScriptFile>
+		<Condition xsi:type="Not">
+			<Argument xsi:type="Equals">
+				<Expression>$$SYS:GDBSTUB_HOST$$</Expression>
+				<ExpectedValue/>
+			</Argument>
+		</Condition>
+	</ProgrammingInterface>
+	<ProgrammingInterface>
 		<ID>stlink-v1</ID>
 		<Name>ST-Link v1</Name>
+		<ClassID>stlink</ClassID>
 		<ScriptFile>interface/stlink-v1.cfg</ScriptFile>
 		<UsbIdentities>
 			<UsbIdentity>
@@ -17,6 +51,7 @@
 	</ProgrammingInterface>
 	<ProgrammingInterface>
 		<ID>stlink-v2</ID>
+		<ClassID>stlink</ClassID>
 		<Name>ST-Link v2</Name>
 		<ScriptFile>interface/stlink-v2.cfg</ScriptFile>
 		<UsbIdentities>
@@ -32,6 +67,7 @@
 	</ProgrammingInterface>
 	<ProgrammingInterface>
 		<ID>stlink-v2-1</ID>
+		<ClassID>stlink</ClassID>
 		<Name>ST-Link v2.1</Name>
 		<ScriptFile>interface/stlink-v2-1.cfg</ScriptFile>
 		<UsbIdentities>
@@ -48,6 +84,7 @@
 	</ProgrammingInterface>
 	<ProgrammingInterface>
 		<ID>stlink-v3</ID>
+		<ClassID>stlink</ClassID>
 		<Name>ST-Link v3</Name>
 		<ScriptFile>interface/stlink.cfg</ScriptFile>
 		<UsbIdentities>
@@ -205,6 +242,7 @@
 		<ID>olimex-arm-usb-ocd</ID>
 		<Name>Olimex ARM-USB-OCD</Name>
 		<ScriptFile>interface/ftdi/olimex-arm-usb-ocd.cfg</ScriptFile>
+		<SWDScriptFile>transport/olimex-arm-jtag-swd.cfg</SWDScriptFile>
 		<UsbIdentities>
 			<UsbIdentity>
 				<VID>15ba</VID>
@@ -218,6 +256,7 @@
 		<ID>olimex-arm-usb-ocd-h</ID>
 		<Name>Olimex ARM-USB-OCD-H</Name>
 		<ScriptFile>interface/ftdi/olimex-arm-usb-ocd-h.cfg</ScriptFile>
+		<SWDScriptFile>transport/olimex-arm-jtag-swd.cfg</SWDScriptFile>
 		<UsbIdentities>
 			<UsbIdentity>
 				<VID>15ba</VID>
@@ -232,6 +271,7 @@
 		<ID>olimex-arm-usb-tiny-h</ID>
 		<Name>Olimex ARM-USB-OCD-Tiny</Name>
 		<ScriptFile>interface/ftdi/olimex-arm-usb-tiny-h.cfg</ScriptFile>
+		<SWDScriptFile>transport/olimex-arm-jtag-swd.cfg</SWDScriptFile>
 		<UsbIdentities>
 			<UsbIdentity>
 				<VID>15ba</VID>
@@ -246,6 +286,7 @@
 		<ID>olimex-jtag-tiny</ID>
 		<Name>Olimex JTAG-Tiny</Name>
 		<ScriptFile>interface/ftdi/olimex-jtag-tiny.cfg</ScriptFile>
+		<SWDScriptFile>transport/olimex-arm-jtag-swd.cfg</SWDScriptFile>
 		<UsbIdentities>
 			<UsbIdentity>
 				<VID>15ba</VID>
@@ -326,6 +367,11 @@
 				<PID>2111</PID>
 				<Interface>00</Interface>
 			</UsbIdentity>
+			<UsbIdentity>
+				<VID>04B4</VID>
+				<PID>F148</PID>
+				<Interface>00</Interface>
+			</UsbIdentity>
 		</UsbIdentities>
 		<SerialNumberCommand>cmsis_dap_serial</SerialNumberCommand>
 	</ProgrammingInterface>
@@ -357,4 +403,32 @@
 		<SerialNumberCommand>xds110_serial</SerialNumberCommand>
         <UniversalDriverId>com.sysprogs.ti.xds110</UniversalDriverId>
 	</ProgrammingInterface>
+	<ProgrammingInterface>
+		<ID>tumpa</ID>
+		<Name>Tumpa</Name>
+		<ScriptFile>interface/ftdi/tumpa.cfg</ScriptFile>
+		<UsbIdentities>
+		  <UsbIdentity>
+			<VID>0403</VID>
+			<PID>8A98</PID>
+			<Interface>00</Interface>
+		  </UsbIdentity>
+		</UsbIdentities>
+		<UniversalDriverId>com.sysprogs.libusb.mini</UniversalDriverId>
+		<SerialNumberCommand>ftdi_serial</SerialNumberCommand>
+	</ProgrammingInterface>	
+	<ProgrammingInterface>
+		<ID>picoprobe</ID>
+		<Name>Raspberry Pi Picoprobe</Name>
+		<ScriptFile>interface/picoprobe.cfg</ScriptFile>
+		<UsbIdentities>
+		  <UsbIdentity>
+			<VID>2E8A</VID>
+			<PID>0004</PID>
+			<Interface>02</Interface>
+		  </UsbIdentity>
+		</UsbIdentities>
+		<UniversalDriverId>com.sysprogs.libusb.mini</UniversalDriverId>
+		<SerialNumberCommand>picoprobe_serial</SerialNumberCommand>
+	</ProgrammingInterface>	
 </ArrayOfProgrammingInterface>

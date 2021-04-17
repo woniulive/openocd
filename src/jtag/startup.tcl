@@ -29,7 +29,7 @@ proc init_reset { mode } {
 #########
 
 # TODO: power_restore and power_dropout are currently neither
-# documented nor supported except on ZY1000.
+# documented nor supported.
 
 proc power_restore {} {
 	echo "Sensed power restore, running reset init and halting GDB."
@@ -55,7 +55,7 @@ proc power_dropout {} {
 #########
 
 # TODO: srst_deasserted and srst_asserted are currently neither
-# documented nor supported except on ZY1000.
+# documented nor supported.
 
 proc srst_deasserted {} {
 	echo "Sensed nSRST deasserted, running reset init and halting GDB."
@@ -115,25 +115,10 @@ proc jtag_ntrst_assert_width args {
 
 # BEGIN MIGRATION AIDS ...  these adapter operations originally had
 # JTAG-specific names despite the fact that the operations were not
-# specific to JTAG, or otherewise had troublesome/misleading names.
+# specific to JTAG, or otherwise had troublesome/misleading names.
 #
-# FIXME phase these aids out after about April 2011
+# FIXME phase these aids out after some releases
 #
-proc jtag_khz args {
-	echo "DEPRECATED! use 'adapter speed' not 'jtag_khz'"
-	eval adapter speed $args
-}
-
-proc jtag_nsrst_delay args {
-	echo "DEPRECATED! use 'adapter srst delay' not 'jtag_nsrst_delay'"
-	eval adapter srst delay $args
-}
-
-proc jtag_nsrst_assert_width args {
-	echo "DEPRECATED! use 'adapter srst pulse_width' not 'jtag_nsrst_assert_width'"
-	eval adapter srst pulse_width $args
-}
-
 proc jtag_reset args {
 	echo "DEPRECATED! use 'adapter \[de\]assert' not 'jtag_reset'"
 	switch $args {
@@ -148,32 +133,6 @@ proc jtag_reset args {
 		default
 			{return -code 1 -level 1 "jtag_reset: syntax error"}
 	}
-}
-
-# stlink migration helpers
-proc stlink_device_desc args {
-	echo "DEPRECATED! use 'hla_device_desc' not 'stlink_device_desc'"
-	eval hla_device_desc $args
-}
-
-proc stlink_serial args {
-	echo "DEPRECATED! use 'hla_serial' not 'stlink_serial'"
-	eval hla_serial $args
-}
-
-proc stlink_layout args {
-	echo "DEPRECATED! use 'hla_layout' not 'stlink_layout'"
-	eval hla_layout $args
-}
-
-proc stlink_vid_pid args {
-	echo "DEPRECATED! use 'hla_vid_pid' not 'stlink_vid_pid'"
-	eval hla_vid_pid $args
-}
-
-proc stlink args {
-	echo "DEPRECATED! use 'hla' not 'stlink'"
-	eval hla $args
 }
 
 proc adapter_khz args {
@@ -214,6 +173,25 @@ proc  interface_list args {
 proc ftdi_location args {
 	echo "DEPRECATED! use 'adapter usb location' not 'ftdi_location'"
 	eval adapter usb location $args
+}
+
+proc xds110_serial args {
+	echo "DEPRECATED! use 'xds110 serial' not 'xds110_serial'"
+	eval xds110 serial $args
+}
+
+proc xds110_supply_voltage args {
+	echo "DEPRECATED! use 'xds110 supply' not 'xds110_supply_voltage'"
+	eval xds110 supply $args
+}
+
+proc hla {cmd args} {
+        tailcall "hla $cmd" {*}$args
+}
+
+proc "hla newtap" {args} {
+	echo "DEPRECATED! use 'swj_newdap' not 'hla newtap'"
+	eval swj_newdap $args
 }
 
 # END MIGRATION AIDS

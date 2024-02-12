@@ -1,15 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /*
  * Copyright (C) 2009 by David Brownell
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #ifndef OPENOCD_TARGET_ARMV8_DPM_H
@@ -37,8 +29,6 @@ int armv8_dpm_modeswitch(struct arm_dpm *dpm, enum arm_mode mode);
 
 
 int armv8_dpm_write_dirty_registers(struct arm_dpm *dpm, bool bpwp);
-
-void armv8_dpm_report_wfar(struct arm_dpm *dpm, uint64_t wfar);
 
 /* DSCR bits; see ARMv7a arch spec section C10.3.1.
  * Not all v7 bits are valid in v6.

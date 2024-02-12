@@ -1,7 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 # Defines basic Tcl procs for OpenOCD target module
 
 proc new_target_name { } {
-	return [target number [expr [target count] - 1 ]]
+	return [target number [expr {[target count] - 1}]]
 }
 
 global in_process_reset
@@ -16,7 +18,7 @@ proc ocd_process_reset { MODE } {
 	}
 
 	set in_process_reset 1
-	set success [expr [catch {ocd_process_reset_inner $MODE} result]==0]
+	set success [expr {[catch {ocd_process_reset_inner $MODE} result] == 0}]
 	set in_process_reset 0
 
 	if {$success} {
@@ -30,18 +32,17 @@ proc ocd_process_reset_inner { MODE } {
 	set targets [target names]
 
 	# If this target must be halted...
-	set halt -1
-	if { 0 == [string compare $MODE halt] } {
-		set halt 1
-	}
-	if { 0 == [string compare $MODE init] } {
-		set halt 1;
-	}
-	if { 0 == [string compare $MODE run ] } {
-		set halt 0;
-	}
-	if { $halt < 0 } {
-		return -code error "Invalid mode: $MODE, must be one of: halt, init, or run";
+	switch $MODE {
+		halt -
+		init {
+			set halt 1
+		}
+		run {
+			set halt 0
+		}
+		default {
+			return -code error "Invalid mode: $MODE, must be one of: halt, init, or run";
+		}
 	}
 
 	# Target event handlers *might* change which TAPs are enabled
@@ -113,10 +114,21 @@ proc ocd_process_reset_inner { MODE } {
 				continue
 			}
 
-			# don't wait for targets where examination is deferred
-			# they can not be halted anyway at this point
-			if { ![$t was_examined] && [$t examine_deferred] } {
-				continue
+			if { ![$t was_examined] } {
+				# don't wait for targets where examination is deferred
+				# they can not be halted anyway at this point
+				if { [$t examine_deferred] } {
+					continue
+				}
+				# try to re-examine or target state will be unknown
+				$t invoke-event examine-start
+				set err [catch "$t arp_examine allow-defer"]
+				if { $err } {
+					$t invoke-event examine-fail
+					return -code error [format "TARGET: %s - Not examined" $t]
+				} else {
+					$t invoke-event examine-end
+				}
 			}
 
 			# Wait up to 1 second for target to halt. Why 1sec? Cause
@@ -130,14 +142,14 @@ proc ocd_process_reset_inner { MODE } {
 			# Did we succeed?
 			set s [$t curstate]
 
-			if { 0 != [string compare $s "halted" ] } {
+			if { $s != "halted" } {
 				return -code error [format "TARGET: %s - Not halted" $t]
 			}
 		}
 	}
 
 	#Pass 2 - if needed "init"
-	if { 0 == [string compare init $MODE] } {
+	if { $MODE == "init" } {
 		foreach t $targets {
 			if {[using_jtag] && ![jtag tapisenabled [$t cget -chain-position]]} {
 				continue
@@ -205,4 +217,67 @@ proc init_target_events {} {
 
 # Additionally board config scripts can define a procedure init_board that will be executed after init and init_targets
 proc init_board {} {
+}
+
+proc mem2array {arrayname bitwidth address count {phys ""}} {
+	echo "DEPRECATED! use 'read_memory' not 'mem2array'"
+
+	upvar $arrayname $arrayname
+	set $arrayname ""
+	set i 0
+
+	foreach elem [read_memory $address $bitwidth $count {*}$phys] {
+		set ${arrayname}($i) $elem
+		incr i
+	}
+}
+
+proc array2mem {arrayname bitwidth address count {phys ""}} {
+	echo "DEPRECATED! use 'write_memory' not 'array2mem'"
+
+	upvar $arrayname $arrayname
+	set data ""
+
+	for {set i 0} {$i < $count} {incr i} {
+		lappend data [expr $${arrayname}($i)]
+	}
+
+	write_memory $address $bitwidth $data {*}$phys
+}
+
+# smp_on/smp_off were already DEPRECATED in v0.11.0 through http://openocd.zylin.com/4615
+lappend _telnet_autocomplete_skip "aarch64 smp_on"
+proc "aarch64 smp_on" {args} {
+	echo "DEPRECATED! use 'aarch64 smp on' not 'aarch64 smp_on'"
+	eval aarch64 smp on $args
+}
+
+lappend _telnet_autocomplete_skip "aarch64 smp_off"
+proc "aarch64 smp_off" {args} {
+	echo "DEPRECATED! use 'aarch64 smp off' not 'aarch64 smp_off'"
+	eval aarch64 smp off $args
+}
+
+lappend _telnet_autocomplete_skip "cortex_a smp_on"
+proc "cortex_a smp_on" {args} {
+	echo "DEPRECATED! use 'cortex_a smp on' not 'cortex_a smp_on'"
+	eval cortex_a smp on $args
+}
+
+lappend _telnet_autocomplete_skip "cortex_a smp_off"
+proc "cortex_a smp_off" {args} {
+	echo "DEPRECATED! use 'cortex_a smp off' not 'cortex_a smp_off'"
+	eval cortex_a smp off $args
+}
+
+lappend _telnet_autocomplete_skip "mips_m4k smp_on"
+proc "mips_m4k smp_on" {args} {
+	echo "DEPRECATED! use 'mips_m4k smp on' not 'mips_m4k smp_on'"
+	eval mips_m4k smp on $args
+}
+
+lappend _telnet_autocomplete_skip "mips_m4k smp_off"
+proc "mips_m4k smp_off" {args} {
+	echo "DEPRECATED! use 'mips_m4k smp off' not 'mips_m4k smp_off'"
+	eval mips_m4k smp off $args
 }

@@ -59,8 +59,7 @@ changes pending in gerrit.
 - tap_set_state(TAP_RESET) is already done in src/jtag/core.c. No need
   to replicate it in the drivers, apart in case the driver sets TRST
   independently
-- separate SWIM from HLA and make it independent
-- add .hla_ops and .swim_ops to "adapter"
+- add .hla_ops to "adapter"
 - HLA is a API level (.hla_ops). Transport should simply be {jtag,swd},
   not {hla_jtag,hla_swd}.
 
@@ -203,8 +202,6 @@ https://lists.berlios.de/pipermail/openocd-development/2009-October/011506.html
 - MC1322x support (JW/DE?)
   - integrate and test support from JW (and DE?)
   - get working with a known good interface (i.e. not today's jlink)
-- AT91SAM92xx:
-  - improvements for unknown-board-atmel-at91sam9260.cfg (RD)
 - STR9x: (ZW)
   - improvements to str912.cfg to be more general purpose
 - AVR: (SQ)

@@ -113,6 +113,11 @@
 				<PID>3753</PID>
 				<Interface>00</Interface>
 			</UsbIdentity>
+			<UsbIdentity>
+				<VID>0483</VID>
+				<PID>3754</PID>
+				<Interface>00</Interface>
+			</UsbIdentity>
 		</UsbIdentities>
 		<IsHLA>true</IsHLA>
 		<SerialNumberCommand>hla_serial</SerialNumberCommand>
@@ -372,6 +377,11 @@
 				<PID>F148</PID>
 				<Interface>00</Interface>
 			</UsbIdentity>
+			<UsbIdentity>
+				<VID>2E8A</VID>
+				<PID>000C</PID>
+				<Interface>00</Interface>
+			</UsbIdentity>
 		</UsbIdentities>
 		<SerialNumberCommand>cmsis_dap_serial</SerialNumberCommand>
 	</ProgrammingInterface>
@@ -429,6 +439,6 @@
 		  </UsbIdentity>
 		</UsbIdentities>
 		<UniversalDriverId>com.sysprogs.libusb.mini</UniversalDriverId>
-		<SerialNumberCommand>picoprobe_serial</SerialNumberCommand>
+		<SerialNumberCommand>pico_serialnum</SerialNumberCommand>
 	</ProgrammingInterface>	
 </ArrayOfProgrammingInterface>

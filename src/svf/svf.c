@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 /***************************************************************************
  *    Copyright (C) 2009 by Simon Qian                                     *
  *    SimonQian@SimonQian.com                                              *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 /* The specification for SVF is available here:
@@ -31,7 +20,10 @@
 
 #include <jtag/jtag.h>
 #include "svf.h"
+#include "helper/system.h"
 #include <helper/time_support.h>
+#include <helper/nvp.h>
+#include <stdbool.h>
 
 /* SVF command */
 enum svf_command {
@@ -149,6 +141,9 @@ static const struct svf_statemove svf_statemoves[] = {
 #define XXR_TDO				(1 << 1)
 #define XXR_MASK			(1 << 2)
 #define XXR_SMASK			(1 << 3)
+
+#define SVF_MAX_ADDCYCLES	255
+
 struct svf_xxr_para {
 	int len;
 	int data_mask;
@@ -230,6 +225,8 @@ static int svf_buffer_index, svf_buffer_size;
 static int svf_quiet;
 static int svf_nil;
 static int svf_ignore_error;
+static bool svf_noreset;
+static int svf_addcycles;
 
 /* Targeting particular tap */
 static int svf_tap_is_specified;
@@ -301,7 +298,7 @@ static int svf_realloc_buffers(size_t len)
 
 static void svf_free_xxd_para(struct svf_xxr_para *para)
 {
-	if (NULL != para) {
+	if (para) {
 		free(para->tdi);
 		para->tdi = NULL;
 
@@ -350,19 +347,51 @@ int svf_add_statemove(tap_state_t state_to)
 	return ERROR_FAIL;
 }
 
+enum svf_cmd_param {
+	OPT_ADDCYCLES,
+	OPT_IGNORE_ERROR,
+	OPT_NIL,
+	OPT_NORESET,
+	OPT_PROGRESS,
+	OPT_QUIET,
+	OPT_TAP,
+	/* DEPRECATED */
+	DEPRECATED_OPT_IGNORE_ERROR,
+	DEPRECATED_OPT_NIL,
+	DEPRECATED_OPT_PROGRESS,
+	DEPRECATED_OPT_QUIET,
+};
+
+static const struct nvp svf_cmd_opts[] = {
+	{ .name = "-addcycles",    .value = OPT_ADDCYCLES },
+	{ .name = "-ignore_error", .value = OPT_IGNORE_ERROR },
+	{ .name = "-nil",          .value = OPT_NIL },
+	{ .name = "-noreset",      .value = OPT_NORESET },
+	{ .name = "-progress",     .value = OPT_PROGRESS },
+	{ .name = "-quiet",        .value = OPT_QUIET },
+	{ .name = "-tap",          .value = OPT_TAP },
+	/* DEPRECATED */
+	{ .name = "ignore_error",  .value = DEPRECATED_OPT_IGNORE_ERROR },
+	{ .name = "nil",           .value = DEPRECATED_OPT_NIL },
+	{ .name = "progress",      .value = DEPRECATED_OPT_PROGRESS },
+	{ .name = "quiet",         .value = DEPRECATED_OPT_QUIET },
+	{ .name = NULL,            .value = -1 }
+};
+
 COMMAND_HANDLER(handle_svf_command)
 {
 #define SVF_MIN_NUM_OF_OPTIONS 1
-#define SVF_MAX_NUM_OF_OPTIONS 5
+#define SVF_MAX_NUM_OF_OPTIONS 8
 	int command_num = 0;
 	int ret = ERROR_OK;
 	int64_t time_measure_ms;
 	int time_measure_s, time_measure_m;
 
-	/* use NULL to indicate a "plain" svf file which accounts for
+	/*
+	 * use NULL to indicate a "plain" svf file which accounts for
 	 * any additional devices in the scan chain, otherwise the device
 	 * that should be affected
-	*/
+	 */
 	struct jtag_tap *tap = NULL;
 
 	if ((CMD_ARGC < SVF_MIN_NUM_OF_OPTIONS) || (CMD_ARGC > SVF_MAX_NUM_OF_OPTIONS))
@@ -373,38 +402,82 @@ COMMAND_HANDLER(handle_svf_command)
 	svf_nil = 0;
 	svf_progress_enabled = 0;
 	svf_ignore_error = 0;
+	svf_noreset = false;
+	svf_addcycles = 0;
+
 	for (unsigned int i = 0; i < CMD_ARGC; i++) {
-		if (strcmp(CMD_ARGV[i], "-tap") == 0) {
+		const struct nvp *n = nvp_name2value(svf_cmd_opts, CMD_ARGV[i]);
+		switch (n->value) {
+		case OPT_ADDCYCLES:
+			svf_addcycles = atoi(CMD_ARGV[i + 1]);
+			if (svf_addcycles > SVF_MAX_ADDCYCLES) {
+				command_print(CMD, "addcycles: %s out of range", CMD_ARGV[i + 1]);
+				if (svf_fd)
+					fclose(svf_fd);
+				svf_fd = NULL;
+				return ERROR_COMMAND_ARGUMENT_INVALID;
+			}
+			i++;
+			break;
+
+		case OPT_TAP:
 			tap = jtag_tap_by_string(CMD_ARGV[i+1]);
 			if (!tap) {
 				command_print(CMD, "Tap: %s unknown", CMD_ARGV[i+1]);
-				return ERROR_FAIL;
+				if (svf_fd)
+					fclose(svf_fd);
+				svf_fd = NULL;
+				return ERROR_COMMAND_ARGUMENT_INVALID;
 			}
 			i++;
-		} else if ((strcmp(CMD_ARGV[i],
-				"quiet") == 0) || (strcmp(CMD_ARGV[i], "-quiet") == 0))
+			break;
+
+		case DEPRECATED_OPT_QUIET:
+			LOG_INFO("DEPRECATED flag '%s'; use '-%s'", CMD_ARGV[i], CMD_ARGV[i]);
+			/* fallthrough */
+		case OPT_QUIET:
 			svf_quiet = 1;
-		else if ((strcmp(CMD_ARGV[i], "nil") == 0) || (strcmp(CMD_ARGV[i], "-nil") == 0))
+			break;
+
+		case DEPRECATED_OPT_NIL:
+			LOG_INFO("DEPRECATED flag '%s'; use '-%s'", CMD_ARGV[i], CMD_ARGV[i]);
+			/* fallthrough */
+		case OPT_NIL:
 			svf_nil = 1;
-		else if ((strcmp(CMD_ARGV[i],
-				  "progress") == 0) || (strcmp(CMD_ARGV[i], "-progress") == 0))
+			break;
+
+		case DEPRECATED_OPT_PROGRESS:
+			LOG_INFO("DEPRECATED flag '%s'; use '-%s'", CMD_ARGV[i], CMD_ARGV[i]);
+			/* fallthrough */
+		case OPT_PROGRESS:
 			svf_progress_enabled = 1;
-		else if ((strcmp(CMD_ARGV[i],
-				  "ignore_error") == 0) || (strcmp(CMD_ARGV[i], "-ignore_error") == 0))
+			break;
+
+		case DEPRECATED_OPT_IGNORE_ERROR:
+			LOG_INFO("DEPRECATED flag '%s'; use '-%s'", CMD_ARGV[i], CMD_ARGV[i]);
+			/* fallthrough */
+		case OPT_IGNORE_ERROR:
 			svf_ignore_error = 1;
-		else {
+			break;
+
+		case OPT_NORESET:
+			svf_noreset = true;
+			break;
+
+		default:
 			svf_fd = fopen(CMD_ARGV[i], "r");
-			if (svf_fd == NULL) {
+			if (!svf_fd) {
 				int err = errno;
 				command_print(CMD, "open(\"%s\"): %s", CMD_ARGV[i], strerror(err));
 				/* no need to free anything now */
 				return ERROR_COMMAND_SYNTAX_ERROR;
-			} else
-				LOG_USER("svf processing file: \"%s\"", CMD_ARGV[i]);
+			}
+			LOG_USER("svf processing file: \"%s\"", CMD_ARGV[i]);
+			break;
 		}
 	}
 
-	if (svf_fd == NULL)
+	if (!svf_fd)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	/* get time */
@@ -416,7 +489,7 @@ COMMAND_HANDLER(handle_svf_command)
 
 	svf_check_tdo_para_index = 0;
 	svf_check_tdo_para = malloc(sizeof(struct svf_check_tdo_para) * SVF_CHECK_TDO_PARA_SIZE);
-	if (NULL == svf_check_tdo_para) {
+	if (!svf_check_tdo_para) {
 		LOG_ERROR("not enough memory");
 		ret = ERROR_FAIL;
 		goto free_all;
@@ -434,7 +507,7 @@ COMMAND_HANDLER(handle_svf_command)
 
 	memcpy(&svf_para, &svf_para_init, sizeof(svf_para));
 
-	if (!svf_nil) {
+	if (!svf_nil && !svf_noreset) {
 		/* TAP_RESET */
 		jtag_add_tlr();
 	}
@@ -459,27 +532,31 @@ COMMAND_HANDLER(handle_svf_command)
 		}
 
 		/* HDR %d TDI (0) */
-		if (ERROR_OK != svf_set_padding(&svf_para.hdr_para, header_dr_len, 0)) {
-			LOG_ERROR("failed to set data header");
-			return ERROR_FAIL;
+		ret = svf_set_padding(&svf_para.hdr_para, header_dr_len, 0);
+		if (ret != ERROR_OK) {
+			command_print(CMD, "failed to set data header");
+			goto free_all;
 		}
 
 		/* HIR %d TDI (0xFF) */
-		if (ERROR_OK != svf_set_padding(&svf_para.hir_para, header_ir_len, 0xFF)) {
-			LOG_ERROR("failed to set instruction header");
-			return ERROR_FAIL;
+		ret = svf_set_padding(&svf_para.hir_para, header_ir_len, 0xFF);
+		if (ret != ERROR_OK) {
+			command_print(CMD, "failed to set instruction header");
+			goto free_all;
 		}
 
 		/* TDR %d TDI (0) */
-		if (ERROR_OK != svf_set_padding(&svf_para.tdr_para, trailer_dr_len, 0)) {
-			LOG_ERROR("failed to set data trailer");
-			return ERROR_FAIL;
+		ret = svf_set_padding(&svf_para.tdr_para, trailer_dr_len, 0);
+		if (ret != ERROR_OK) {
+			command_print(CMD, "failed to set data trailer");
+			goto free_all;
 		}
 
 		/* TIR %d TDI (0xFF) */
-		if (ERROR_OK != svf_set_padding(&svf_para.tir_para, trailer_ir_len, 0xFF)) {
-			LOG_ERROR("failed to set instruction trailer");
-			return ERROR_FAIL;
+		ret = svf_set_padding(&svf_para.tir_para, trailer_ir_len, 0xFF);
+		if (ret != ERROR_OK) {
+			command_print(CMD, "failed to set instruction trailer");
+			goto free_all;
 		}
 	}
 
@@ -491,7 +568,7 @@ COMMAND_HANDLER(handle_svf_command)
 		}
 		rewind(svf_fd);
 	}
-	while (ERROR_OK == svf_read_command_from_file(svf_fd)) {
+	while (svf_read_command_from_file(svf_fd) == ERROR_OK) {
 		/* Log Output */
 		if (svf_quiet) {
 			if (svf_progress_enabled) {
@@ -509,7 +586,7 @@ COMMAND_HANDLER(handle_svf_command)
 				LOG_USER_N("%s", svf_read_line);
 		}
 		/* Run Command */
-		if (ERROR_OK != svf_run_command(CMD_CTX, svf_command_buffer)) {
+		if (svf_run_command(CMD_CTX, svf_command_buffer) != ERROR_OK) {
 			LOG_ERROR("fail to run command at line %d", svf_line_number);
 			ret = ERROR_FAIL;
 			break;
@@ -517,9 +594,9 @@ COMMAND_HANDLER(handle_svf_command)
 		command_num++;
 	}
 
-	if ((!svf_nil) && (ERROR_OK != jtag_execute_queue()))
+	if ((!svf_nil) && (jtag_execute_queue() != ERROR_OK))
 		ret = ERROR_FAIL;
-	else if (ERROR_OK != svf_check_tdo())
+	else if (svf_check_tdo() != ERROR_OK)
 		ret = ERROR_FAIL;
 
 	/* print time */
@@ -538,7 +615,7 @@ COMMAND_HANDLER(handle_svf_command)
 free_all:
 
 	fclose(svf_fd);
-	svf_fd = 0;
+	svf_fd = NULL;
 
 	/* free buffers */
 	free(svf_command_buffer);
@@ -568,7 +645,7 @@ free_all:
 	svf_free_xxd_para(&svf_para.sdr_para);
 	svf_free_xxd_para(&svf_para.sir_para);
 
-	if (ERROR_OK == ret)
+	if (ret == ERROR_OK)
 		command_print(CMD,
 			      "svf file programmed %s for %d commands with %d errors",
 			      (svf_ignore_error > 1) ? "unsuccessfully" : "successfully",
@@ -586,7 +663,7 @@ static int svf_getline(char **lineptr, size_t *n, FILE *stream)
 #define MIN_CHUNK 16	/* Buffer is increased by this size each time as required */
 	size_t i = 0;
 
-	if (*lineptr == NULL) {
+	if (!*lineptr) {
 		*n = MIN_CHUNK;
 		*lineptr = malloc(*n);
 		if (!*lineptr)
@@ -674,7 +751,7 @@ static int svf_read_command_from_file(FILE *fd)
 				if (cmd_pos + 3 > svf_command_buffer_size) {
 					svf_command_buffer = realloc(svf_command_buffer, cmd_pos + 3);
 					svf_command_buffer_size = cmd_pos + 3;
-					if (svf_command_buffer == NULL) {
+					if (!svf_command_buffer) {
 						LOG_ERROR("not enough memory");
 						return ERROR_FAIL;
 					}
@@ -741,8 +818,8 @@ parse_char:
 
 bool svf_tap_state_is_stable(tap_state_t state)
 {
-	return (TAP_RESET == state) || (TAP_IDLE == state)
-			|| (TAP_DRPAUSE == state) || (TAP_IRPAUSE == state);
+	return (state == TAP_RESET) || (state == TAP_IDLE)
+			|| (state == TAP_DRPAUSE) || (state == TAP_IRPAUSE);
 }
 
 static int svf_find_string_in_array(char *str, char **strs, int num_of_element)
@@ -760,10 +837,10 @@ static int svf_adjust_array_length(uint8_t **arr, int orig_bit_len, int new_bit_
 {
 	int new_byte_len = (new_bit_len + 7) >> 3;
 
-	if ((NULL == *arr) || (((orig_bit_len + 7) >> 3) < ((new_bit_len + 7) >> 3))) {
+	if ((!*arr) || (((orig_bit_len + 7) >> 3) < ((new_bit_len + 7) >> 3))) {
 		free(*arr);
 		*arr = calloc(1, new_byte_len);
-		if (NULL == *arr) {
+		if (!*arr) {
 			LOG_ERROR("not enough memory");
 			return ERROR_FAIL;
 		}
@@ -789,7 +866,7 @@ static int svf_copy_hexstring_to_binary(char *str, uint8_t **bin, int orig_bit_l
 	int i, str_len = strlen(str), str_hbyte_len = (bit_len + 3) >> 2;
 	uint8_t ch = 0;
 
-	if (ERROR_OK != svf_adjust_array_length(bin, orig_bit_len, bit_len)) {
+	if (svf_adjust_array_length(bin, orig_bit_len, bit_len) != ERROR_OK) {
 		LOG_ERROR("fail to adjust length of array");
 		return ERROR_FAIL;
 	}
@@ -892,9 +969,9 @@ static int svf_add_check_para(uint8_t enabled, int buffer_offset, int bit_len)
 
 static int svf_execute_tap(void)
 {
-	if ((!svf_nil) && (ERROR_OK != jtag_execute_queue()))
+	if ((!svf_nil) && (jtag_execute_queue() != ERROR_OK))
 		return ERROR_FAIL;
-	else if (ERROR_OK != svf_check_tdo())
+	else if (svf_check_tdo() != ERROR_OK)
 		return ERROR_FAIL;
 
 	svf_buffer_index = 0;
@@ -922,7 +999,7 @@ static int svf_run_command(struct command_context *cmd_ctx, char *cmd_str)
 	/* flag padding commands skipped due to -tap command */
 	int padding_command_skipped = 0;
 
-	if (ERROR_OK != svf_parse_cmd_string(cmd_str, strlen(cmd_str), argus, &num_of_argu))
+	if (svf_parse_cmd_string(cmd_str, strlen(cmd_str), argus, &num_of_argu) != ERROR_OK)
 		return ERROR_FAIL;
 
 	/* NOTE: we're a bit loose here, because we ignore case in
@@ -962,7 +1039,7 @@ static int svf_run_command(struct command_context *cmd_ctx, char *cmd_str)
 				LOG_ERROR("invalid parameter of %s", argus[0]);
 				return ERROR_FAIL;
 			}
-			if (1 == num_of_argu) {
+			if (num_of_argu == 1) {
 				/* TODO: set jtag speed to full speed */
 				svf_para.frequency = 0;
 			} else {
@@ -970,7 +1047,7 @@ static int svf_run_command(struct command_context *cmd_ctx, char *cmd_str)
 					LOG_ERROR("HZ not found in FREQUENCY command");
 					return ERROR_FAIL;
 				}
-				if (ERROR_OK != svf_execute_tap())
+				if (svf_execute_tap() != ERROR_OK)
 					return ERROR_FAIL;
 				svf_para.frequency = atof(argus[1]);
 				/* TODO: set jtag speed to */
@@ -988,35 +1065,35 @@ static int svf_run_command(struct command_context *cmd_ctx, char *cmd_str)
 				break;
 			}
 			xxr_para_tmp = &svf_para.hdr_para;
-			goto XXR_common;
+			goto xxr_common;
 		case HIR:
 			if (svf_tap_is_specified) {
 				padding_command_skipped = 1;
 				break;
 			}
 			xxr_para_tmp = &svf_para.hir_para;
-			goto XXR_common;
+			goto xxr_common;
 		case TDR:
 			if (svf_tap_is_specified) {
 				padding_command_skipped = 1;
 				break;
 			}
 			xxr_para_tmp = &svf_para.tdr_para;
-			goto XXR_common;
+			goto xxr_common;
 		case TIR:
 			if (svf_tap_is_specified) {
 				padding_command_skipped = 1;
 				break;
 			}
 			xxr_para_tmp = &svf_para.tir_para;
-			goto XXR_common;
+			goto xxr_common;
 		case SDR:
 			xxr_para_tmp = &svf_para.sdr_para;
-			goto XXR_common;
+			goto xxr_common;
 		case SIR:
 			xxr_para_tmp = &svf_para.sir_para;
-			goto XXR_common;
-XXR_common:
+			goto xxr_common;
+xxr_common:
 			/* XXR length [TDI (tdi)] [TDO (tdo)][MASK (mask)] [SMASK (smask)] */
 			if ((num_of_argu > 10) || (num_of_argu % 2)) {
 				LOG_ERROR("invalid parameter of %s", argus[0]);
@@ -1090,7 +1167,7 @@ XXR_common:
 			}
 			/* If TDO is absent, no comparison is needed, set the mask to 0 */
 			if (!(xxr_para_tmp->data_mask & XXR_TDO)) {
-				if (NULL == xxr_para_tmp->tdo) {
+				if (!xxr_para_tmp->tdo) {
 					if (ERROR_OK !=
 					svf_adjust_array_length(&xxr_para_tmp->tdo, i_tmp,
 						xxr_para_tmp->len)) {
@@ -1098,7 +1175,7 @@ XXR_common:
 						return ERROR_FAIL;
 					}
 				}
-				if (NULL == xxr_para_tmp->mask) {
+				if (!xxr_para_tmp->mask) {
 					if (ERROR_OK !=
 					svf_adjust_array_length(&xxr_para_tmp->mask, i_tmp,
 						xxr_para_tmp->len)) {
@@ -1109,7 +1186,7 @@ XXR_common:
 				memset(xxr_para_tmp->mask, 0, (xxr_para_tmp->len + 7) >> 3);
 			}
 			/* do scan if necessary */
-			if (SDR == command) {
+			if (command == SDR) {
 				/* check buffer size first, reallocate if necessary */
 				i = svf_para.hdr_para.len + svf_para.sdr_para.len +
 						svf_para.tdr_para.len;
@@ -1199,8 +1276,11 @@ XXR_common:
 							svf_para.dr_end_state);
 				}
 
+				if (svf_addcycles)
+					jtag_add_clocks(svf_addcycles);
+
 				svf_buffer_index += (i + 7) >> 3;
-			} else if (SIR == command) {
+			} else if (command == SIR) {
 				/* check buffer size first, reallocate if necessary */
 				i = svf_para.hir_para.len + svf_para.sir_para.len +
 						svf_para.tir_para.len;
@@ -1419,7 +1499,7 @@ XXR_common:
 			if (num_of_argu > 2) {
 				/* STATE pathstate1 ... stable_state */
 				path = malloc((num_of_argu - 1) * sizeof(tap_state_t));
-				if (NULL == path) {
+				if (!path) {
 					LOG_ERROR("not enough memory");
 					return ERROR_FAIL;
 				}
@@ -1433,7 +1513,7 @@ XXR_common:
 						return ERROR_FAIL;
 					}
 					/* OpenOCD refuses paths containing TAP_RESET */
-					if (TAP_RESET == path[i]) {
+					if (path[i] == TAP_RESET) {
 						/* FIXME last state MUST be stable! */
 						if (i > 0) {
 							if (!svf_nil)
@@ -1486,7 +1566,7 @@ XXR_common:
 				return ERROR_FAIL;
 			}
 			if (svf_para.trst_mode != TRST_ABSENT) {
-				if (ERROR_OK != svf_execute_tap())
+				if (svf_execute_tap() != ERROR_OK)
 					return ERROR_FAIL;
 				i_tmp = svf_find_string_in_array(argus[1],
 						(char **)svf_trst_mode_name,
@@ -1529,13 +1609,12 @@ XXR_common:
 		if ((svf_buffer_index > 0) &&
 				(((command != STATE) && (command != RUNTEST)) ||
 						((command == STATE) && (num_of_argu == 2)))) {
-			if (ERROR_OK != svf_execute_tap())
+			if (svf_execute_tap() != ERROR_OK)
 				return ERROR_FAIL;
 
 			/* output debug info */
-			if ((SIR == command) || (SDR == command)) {
+			if ((command == SIR) || (command == SDR))
 				SVF_BUF_LOG(DEBUG, svf_tdi_buffer, svf_check_tdo_para[0].bit_len, "TDO read");
-			}
 		}
 	} else {
 		/* for fast executing, execute tap if necessary */
@@ -1556,7 +1635,7 @@ static const struct command_registration svf_command_handlers[] = {
 		.handler = handle_svf_command,
 		.mode = COMMAND_EXEC,
 		.help = "Runs a SVF file.",
-		.usage = "[-tap device.tap] <file> [quiet] [nil] [progress] [ignore_error]",
+		.usage = "[-tap device.tap] [-quiet] [-nil] [-progress] [-ignore_error] [-noreset] [-addcycles numcycles] file",
 	},
 	COMMAND_REGISTRATION_DONE
 };

@@ -53,27 +53,23 @@ doc/openocd.toc
 doc/openocd.tp
 doc/openocd.vr
 doc/version.texi
-texinfo.tex
 src/openocd
 src/openocd.exe
 
 # configure/autotools output
+/build-aux/
 aclocal.m4
 autom4te.cache
-compile
-config.*
+config.h
+config.log
+config.status
 configure
-depcomp
 doxygen
 doxygen.log
 Doxyfile
-install-sh
 libtool
-ltmain.sh
 Makefile
 !contrib/loaders/**/Makefile
-mdate-sh
-missing
 stamp-h1
 stamp-vti
 INSTALL
@@ -109,3 +105,19 @@ VisualGDBCache
 VisualGDB
 toolchain.cmake
 /*.user
+
+# GNU Global tag files
+GPATH
+GRTAGS
+GTAGS
+
+# checkpatch script files
+.checkpatch-camelcase.*
+
+# clangd (e.g. for advanced code completion and linting) generates cache files
+# into .cache
+.cache
+
+# A compile_commands.json can be generated using bear and will help tools such
+# as clangd to locate header files and use correct $CFLAGS
+compile_commands.json

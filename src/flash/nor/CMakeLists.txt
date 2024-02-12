@@ -75,4 +75,8 @@ add_library(ocdflashnor
 	sfdp.c
 	sh_qspi.c
 	rs14100.c
-)
+	rp2040.c
+	pic32mm.c
+	npcx.c
+	rsl10.c
+	qn908x.c)

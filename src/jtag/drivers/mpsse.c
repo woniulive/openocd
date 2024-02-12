@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 /**************************************************************************
  *   Copyright (C) 2012 by Andreas Fritiofson                              *
  *   andreas.fritiofson@gmail.com                                          *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -22,7 +11,9 @@
 
 #include "mpsse.h"
 #include "helper/log.h"
+#include "helper/replacements.h"
 #include "helper/time_support.h"
+#include "libusb_helper.h"
 #include <libusb.h>
 
 /* Compatibility define for older libusb-1.0 */
@@ -62,8 +53,8 @@
 #define SIO_RESET_PURGE_TX 2
 
 struct mpsse_ctx {
-	libusb_context *usb_ctx;
-	libusb_device_handle *usb_dev;
+	struct libusb_context *usb_ctx;
+	struct libusb_device_handle *usb_dev;
 	unsigned int usb_write_timeout;
 	unsigned int usb_read_timeout;
 	uint8_t in_ep;
@@ -85,7 +76,7 @@ struct mpsse_ctx {
 };
 
 /* Returns true if the string descriptor indexed by str_index in device matches string */
-static bool string_descriptor_equal(libusb_device_handle *device, uint8_t str_index,
+static bool string_descriptor_equal(struct libusb_device_handle *device, uint8_t str_index,
 	const char *string)
 {
 	int retval;
@@ -99,7 +90,7 @@ static bool string_descriptor_equal(libusb_device_handle *device, uint8_t str_in
 	return strncmp(string, desc_string, sizeof(desc_string)) == 0;
 }
 
-static bool device_location_equal(libusb_device *device, const char *location)
+static bool device_location_equal(struct libusb_device *device, const char *location)
 {
 	bool result = false;
 #ifdef HAVE_LIBUSB_GET_PORT_NUMBERS
@@ -118,7 +109,7 @@ static bool device_location_equal(libusb_device *device, const char *location)
 	LOG_DEBUG("device path has %i steps", path_len);
 
 	ptr = strtok(loc, "-:");
-	if (ptr == NULL) {
+	if (!ptr) {
 		LOG_DEBUG("no ':' in path");
 		goto done;
 	}
@@ -130,7 +121,7 @@ static bool device_location_equal(libusb_device *device, const char *location)
 	path_step = 0;
 	while (path_step < 7) {
 		ptr = strtok(NULL, ".,");
-		if (ptr == NULL) {
+		if (!ptr) {
 			LOG_DEBUG("no more tokens in path at step %i", path_step);
 			break;
 		}
@@ -158,10 +149,10 @@ static bool device_location_equal(libusb_device *device, const char *location)
  * Set any field to 0 as a wildcard. If the device is found true is returned, with ctx containing
  * the already opened handle. ctx->interface must be set to the desired interface (channel) number
  * prior to calling this function. */
-static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, const uint16_t *pid,
+static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t vids[], const uint16_t pids[],
 	const char *product, const char *serial, const char *location)
 {
-	libusb_device **list;
+	struct libusb_device **list;
 	struct libusb_device_descriptor desc;
 	struct libusb_config_descriptor *config0;
 	int err;
@@ -171,7 +162,7 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 		LOG_ERROR("libusb_get_device_list() failed with %s", libusb_error_name(cnt));
 
 	for (ssize_t i = 0; i < cnt; i++) {
-		libusb_device *device = list[i];
+		struct libusb_device *device = list[i];
 
 		err = libusb_get_device_descriptor(device, &desc);
 		if (err != LIBUSB_SUCCESS) {
@@ -179,9 +170,7 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 			continue;
 		}
 
-		if (vid && *vid != desc.idVendor)
-			continue;
-		if (pid && *pid != desc.idProduct)
+		if (!jtag_libusb_match_ids(&desc, vids, pids))
 			continue;
 
 		err = libusb_open(device, &ctx->usb_dev);
@@ -213,7 +202,7 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 	libusb_free_device_list(list, 1);
 
 	if (!found) {
-		LOG_ERROR("no device found");
+		/* The caller reports detailed error desc */
 		return false;
 	}
 
@@ -317,14 +306,14 @@ error:
 	return false;
 }
 
-struct mpsse_ctx *mpsse_open(const uint16_t *vid, const uint16_t *pid, const char *description,
+struct mpsse_ctx *mpsse_open(const uint16_t vids[], const uint16_t pids[], const char *description,
 	const char *serial, const char *location, int channel)
 {
 	struct mpsse_ctx *ctx = calloc(1, sizeof(*ctx));
 	int err;
 
 	if (!ctx)
-		return 0;
+		return NULL;
 
 	bit_copy_queue_init(&ctx->read_queue);
 	ctx->read_chunk_size = 16384;
@@ -353,18 +342,13 @@ struct mpsse_ctx *mpsse_open(const uint16_t *vid, const uint16_t *pid, const cha
 		goto error;
 	}
 
-	if (!open_matching_device(ctx, vid, pid, description, serial, location)) {
-		/* Four hex digits plus terminating zero each */
-		char vidstr[5];
-		char pidstr[5];
-		LOG_ERROR("unable to open ftdi device with vid %s, pid %s, description '%s', "
+	if (!open_matching_device(ctx, vids, pids, description, serial, location)) {
+		LOG_ERROR("unable to open ftdi device with description '%s', "
 				"serial '%s' at bus location '%s'",
-				vid ? sprintf(vidstr, "%04x", *vid), vidstr : "*",
-				pid ? sprintf(pidstr, "%04x", *pid), pidstr : "*",
 				description ? description : "*",
 				serial ? serial : "*",
 				location ? location : "*");
-		ctx->usb_dev = 0;
+		ctx->usb_dev = NULL;
 		goto error;
 	}
 
@@ -394,7 +378,7 @@ struct mpsse_ctx *mpsse_open(const uint16_t *vid, const uint16_t *pid, const cha
 	return ctx;
 error:
 	mpsse_close(ctx);
-	return 0;
+	return NULL;
 }
 
 void mpsse_close(struct mpsse_ctx *ctx)
@@ -481,13 +465,13 @@ static unsigned buffer_add_read(struct mpsse_ctx *ctx, uint8_t *in, unsigned in_
 void mpsse_clock_data_out(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_offset,
 	unsigned length, uint8_t mode)
 {
-	mpsse_clock_data(ctx, out, out_offset, 0, 0, length, mode);
+	mpsse_clock_data(ctx, out, out_offset, NULL, 0, length, mode);
 }
 
 void mpsse_clock_data_in(struct mpsse_ctx *ctx, uint8_t *in, unsigned in_offset, unsigned length,
 	uint8_t mode)
 {
-	mpsse_clock_data(ctx, 0, 0, in, in_offset, length, mode);
+	mpsse_clock_data(ctx, NULL, 0, in, in_offset, length, mode);
 }
 
 void mpsse_clock_data(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_offset, uint8_t *in,
@@ -564,7 +548,7 @@ void mpsse_clock_data(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_of
 void mpsse_clock_tms_cs_out(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_offset,
 	unsigned length, bool tdi, uint8_t mode)
 {
-	mpsse_clock_tms_cs(ctx, out, out_offset, 0, 0, length, tdi, mode);
+	mpsse_clock_tms_cs(ctx, out, out_offset, NULL, 0, length, tdi, mode);
 }
 
 void mpsse_clock_tms_cs(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_offset, uint8_t *in,
@@ -858,7 +842,7 @@ int mpsse_flush(struct mpsse_ctx *ctx)
 	if (ctx->write_count == 0)
 		return retval;
 
-	struct libusb_transfer *read_transfer = 0;
+	struct libusb_transfer *read_transfer = NULL;
 	struct transfer_result read_result = { .ctx = ctx, .done = true };
 	if (ctx->read_count) {
 		buffer_write_byte(ctx, 0x87); /* SEND_IMMEDIATE */
@@ -944,12 +928,12 @@ error_check:
 		retval = ERROR_OK;
 	}
 
+	if (retval != ERROR_OK)
+		mpsse_purge(ctx);
+
 	libusb_free_transfer(write_transfer);
 	if (read_transfer)
 		libusb_free_transfer(read_transfer);
-
-	if (retval != ERROR_OK)
-		mpsse_purge(ctx);
 
 	return retval;
 }

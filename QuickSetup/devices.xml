@@ -105,18 +105,6 @@
 		<SpecifiesAdapterSpeed>true</SpecifiesAdapterSpeed>
 	</TargetDeviceFamily>
 	<TargetDeviceFamily>
-		<ID>STM32H7_DUALCORE</ID>
-		<Name>STM32H7xx (Cortex M7 + M4)</Name>
-		<MatchRegex>^STM32H7.[57].*</MatchRegex>
-		<BspID>com.sysprogs.arm.stm32</BspID>
-		<ScriptFile>target/stm32h7x_dual_core.cfg</ScriptFile>
-		<SpecifiesAdapterSpeed>true</SpecifiesAdapterSpeed>
-		<DebuggedCores>
-			<string>Cortex-M7</string>
-			<string>Cortex-M4</string>
-		</DebuggedCores>
-	</TargetDeviceFamily>
-	<TargetDeviceFamily>
 		<ID>STM32H7_DUALBANK</ID>
 		<Name>STM32H7xx (Dual FLASH bank)</Name>
 		<MatchRegex>^STM32H7(.3|42).*</MatchRegex>
@@ -157,6 +145,14 @@
 		<SpecifiesAdapterSpeed>true</SpecifiesAdapterSpeed>
 	</TargetDeviceFamily>
 	<TargetDeviceFamily>
+		<ID>STM32C0</ID>
+		<Name>STM32C0xx</Name>
+		<MatchRegex>^STM32C0.*</MatchRegex>
+		<BspID>com.sysprogs.arm.stm32</BspID>
+		<ScriptFile>target/stm32c0x.cfg</ScriptFile>
+		<SpecifiesAdapterSpeed>true</SpecifiesAdapterSpeed>
+	</TargetDeviceFamily>
+	<TargetDeviceFamily>
 		<ID>STM32G4_ALT</ID>
 		<Name>STM32G4xx (alternative)</Name>
 		<MatchRegex>^STM32G4.*</MatchRegex>
@@ -171,6 +167,29 @@
 		<BspID>com.sysprogs.arm.stm32wb</BspID>
 		<ScriptFile>target/stm32wbx.cfg</ScriptFile>
 		<SpecifiesAdapterSpeed>true</SpecifiesAdapterSpeed>
+	</TargetDeviceFamily>
+	<TargetDeviceFamily>
+		<ID>STM32WL</ID>
+		<Name>STM32WLxx</Name>
+		<MatchRegex>^STM32WL.*</MatchRegex>
+		<BspID>com.sysprogs.arm.stm32wl</BspID>
+		<ScriptFile>target/stm32wlx.cfg</ScriptFile>
+		<SpecifiesAdapterSpeed>true</SpecifiesAdapterSpeed>
+	</TargetDeviceFamily>
+	<TargetDeviceFamily>
+		<ID>STM32U5</ID>
+		<Name>STM32U5xx</Name>
+		<MatchRegex>^STM32U5.*</MatchRegex>
+		<BspID>com.sysprogs.arm.stm32</BspID>
+		<ScriptFile>target/stm32u5x.cfg</ScriptFile>
+		<SpecifiesAdapterSpeed>true</SpecifiesAdapterSpeed>
+	</TargetDeviceFamily>
+	<TargetDeviceFamily>
+		<ID>BLUENRG-LP</ID>
+		<Name>BlueNRG-LP</Name>
+		<MatchRegex>^BlueNRG-LP$</MatchRegex>
+		<BspID>com.sysprogs.arm.stm32.bluenrg-lp</BspID>
+		<ScriptFile>target/bluenrg-lp.cfg</ScriptFile>
 	</TargetDeviceFamily>
 	<!-- ============================================ AT91SAM7/9 ============================================ -->
 	<TargetDeviceFamily>
@@ -714,6 +733,18 @@
 		<MatchRegex>^RP2040.*</MatchRegex>
 		<ScriptFile>target/rp2040.cfg</ScriptFile>
 		<SuggestedTransport>swd</SuggestedTransport>
+	</TargetDeviceFamily>
+	<TargetDeviceFamily>
+		<ID>PIC32MX</ID>
+		<Name>PIC32MX</Name>
+		<MatchRegex>^PIC32MX.*</MatchRegex>
+		<ScriptFile>target/pic32mx.cfg</ScriptFile>
+	</TargetDeviceFamily>
+	<TargetDeviceFamily>
+		<ID>PIC32MM</ID>
+		<Name>PIC32MM</Name>
+		<MatchRegex>^PIC32MM.*</MatchRegex>
+		<ScriptFile>target/pic32mm.cfg</ScriptFile>
 	</TargetDeviceFamily>
 	
 </ArrayOfTargetDeviceFamily>

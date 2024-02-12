@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 /***************************************************************************
  *   Copyright (C) 2008 by Spencer Oliver                                  *
  *   spen@spen-soft.co.uk                                                  *
@@ -9,19 +11,6 @@
  *                                                                         *
  *   Copyright (C) 2011 by Drasko DRASKOVIC                                *
  *   drasko.draskovic@gmail.com                                            *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -373,6 +362,9 @@ struct reg_cache *mips32_build_reg_cache(struct target *target)
 int mips32_init_arch_info(struct target *target, struct mips32_common *mips32, struct jtag_tap *tap)
 {
 	target->arch_info = mips32;
+	target->gdb_sign_extends_addresses = true;
+	target->ignored_breakpoint_address_bits = 1;
+	
 	mips32->common_magic = MIPS32_COMMON_MAGIC;
 	mips32->fast_data_area = NULL;
 	mips32->isa_imp = MIPS32_ONLY;	/* default */
@@ -395,7 +387,7 @@ int mips32_init_arch_info(struct target *target, struct mips32_common *mips32, s
 
 /* run to exit point. return error if exit point was not reached. */
 static int mips32_run_and_wait(struct target *target, target_addr_t entry_point,
-		int timeout_ms, target_addr_t exit_point, struct mips32_common *mips32)
+		unsigned int timeout_ms, target_addr_t exit_point, struct mips32_common *mips32)
 {
 	uint32_t pc;
 	int retval;
@@ -429,7 +421,7 @@ static int mips32_run_and_wait(struct target *target, target_addr_t entry_point,
 int mips32_run_algorithm(struct target *target, int num_mem_params,
 		struct mem_param *mem_params, int num_reg_params,
 		struct reg_param *reg_params, target_addr_t entry_point,
-		target_addr_t exit_point, int timeout_ms, void *arch_info)
+		target_addr_t exit_point, unsigned int timeout_ms, void *arch_info)
 {
 	struct mips32_common *mips32 = target_to_mips32(target);
 	struct mips32_algorithm *mips32_algorithm_info = arch_info;
@@ -473,7 +465,7 @@ int mips32_run_algorithm(struct target *target, int num_mem_params,
 		if (reg_params[i].direction == PARAM_IN)
 			continue;
 
-		struct reg *reg = register_get_by_name(mips32->core_cache, reg_params[i].reg_name, 0);
+		struct reg *reg = register_get_by_name(mips32->core_cache, reg_params[i].reg_name, false);
 
 		if (!reg) {
 			LOG_ERROR("BUG: register '%s' not found", reg_params[i].reg_name);
@@ -507,7 +499,7 @@ int mips32_run_algorithm(struct target *target, int num_mem_params,
 
 	for (int i = 0; i < num_reg_params; i++) {
 		if (reg_params[i].direction != PARAM_OUT) {
-			struct reg *reg = register_get_by_name(mips32->core_cache, reg_params[i].reg_name, 0);
+			struct reg *reg = register_get_by_name(mips32->core_cache, reg_params[i].reg_name, false);
 			if (!reg) {
 				LOG_ERROR("BUG: register '%s' not found", reg_params[i].reg_name);
 				return ERROR_COMMAND_SYNTAX_ERROR;
@@ -757,6 +749,9 @@ int mips32_checksum_memory(struct target *target, target_addr_t address,
 
 	struct mips32_common *mips32 = target_to_mips32(target);
 	struct mips_ejtag *ejtag_info = &mips32->ejtag_info;
+	
+	if (mips32->isa_imp == MMIPS32_ONLY)
+		return E_FAIL;	//The code below uses the regular MIPS32 instruction set and won't work on MicroMIPS-only devices
 
 	/* see contrib/loaders/checksum/mips32.s for src */
 	uint32_t isa = ejtag_info->isa ? 1 : 0;
@@ -814,7 +809,7 @@ int mips32_checksum_memory(struct target *target, target_addr_t address,
 	init_reg_param(&reg_params[1], "r5", 32, PARAM_OUT);
 	buf_set_u32(reg_params[1].value, 0, 32, count);
 
-	int timeout = 20000 * (1 + (count / (1024 * 1024)));
+	unsigned int timeout = 20000 * (1 + (count / (1024 * 1024)));
 
 	retval = target_run_algorithm(target, 0, NULL, 2, reg_params, crc_algorithm->address,
 				      crc_algorithm->address + (sizeof(mips_crc_code) - 4), timeout, &mips32_info);

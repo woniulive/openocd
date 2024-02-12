@@ -1,22 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 /***************************************************************************
  *   Copyright (C) 2004, 2005 by Dominic Rath                              *
  *   Dominic.Rath@gmx.de                                                   *
  *                                                                         *
  *   Copyright (C) 2007-2010 Øyvind Harboe                                 *
  *   oyvind.harboe@zylin.com                                               *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -31,6 +20,7 @@
 
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 #if IS_DARWIN
 #include <libproc.h>
 #endif
@@ -49,12 +39,13 @@ static int help_flag, version_flag;
 static const struct option long_options[] = {
 	{"help",		no_argument,			&help_flag,		1},
 	{"version",		no_argument,			&version_flag,	1},
-	{"debug",		optional_argument,		0,				'd'},
-	{"file",		required_argument,		0,				'f'},
-	{"search",		required_argument,		0,				's'},
-	{"log_output",	required_argument,		0,				'l'},
-	{"command",		required_argument,		0,				'c'},
-	{0, 0, 0, 0}
+	{"debug",		optional_argument,		NULL,			'd'},
+	{"file",		required_argument,		NULL,			'f'},
+	{"search",		required_argument,		NULL,			's'},
+	{"log_output",	required_argument,		NULL,			'l'},
+	{"command",		required_argument,		NULL,			'c'},
+	{"set",			required_argument,		NULL,			'e'},
+	{NULL, 0, NULL, 0}
 };
 
 int configuration_output_handler(struct command_context *context, const char *line)
@@ -74,7 +65,7 @@ static char *find_exe_path(void)
 	do {
 #if IS_WIN32 && !IS_CYGWIN
 		exepath = malloc(MAX_PATH);
-		if (exepath == NULL)
+		if (!exepath)
 			break;
 		GetModuleFileName(NULL, exepath, MAX_PATH);
 
@@ -86,7 +77,7 @@ static char *find_exe_path(void)
 
 #elif IS_DARWIN
 		exepath = malloc(PROC_PIDPATHINFO_MAXSIZE);
-		if (exepath == NULL)
+		if (!exepath)
 			break;
 		if (proc_pidpath(getpid(), exepath, PROC_PIDPATHINFO_MAXSIZE) <= 0) {
 			free(exepath);
@@ -98,7 +89,7 @@ static char *find_exe_path(void)
 #define PATH_MAX 1024
 #endif
 		char *path = malloc(PATH_MAX);
-		if (path == NULL)
+		if (!path)
 			break;
 		int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
 		size_t size = PATH_MAX;
@@ -116,14 +107,14 @@ static char *find_exe_path(void)
 #elif defined(HAVE_REALPATH) /* Assume POSIX.1-2008 */
 		/* Try Unices in order of likelihood. */
 		exepath = realpath("/proc/self/exe", NULL); /* Linux/Cygwin */
-		if (exepath == NULL)
+		if (!exepath)
 			exepath = realpath("/proc/self/path/a.out", NULL); /* Solaris */
-		if (exepath == NULL)
+		if (!exepath)
 			exepath = realpath("/proc/curproc/file", NULL); /* FreeBSD (Should be covered above) */
 #endif
 	} while (0);
 
-	if (exepath != NULL) {
+	if (exepath) {
 		/* Strip executable file name, leaving path */
 		*strrchr(exepath, '/') = '\0';
 	} else {
@@ -162,7 +153,7 @@ static char *find_relative_path(const char *from, const char *to)
 		if (from[0] != '/')
 			i++;
 		char *next = strchr(from, '/');
-		if (next == NULL)
+		if (!next)
 			break;
 		from = next + 1;
 	}
@@ -320,6 +311,14 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 				if (optarg)
 				    add_config_command(optarg);
 				break;
+			case 'e':
+				if (optarg)
+				{
+					char *command = alloc_printf("set %s", optarg);
+					add_config_command(command);
+					free(command);
+				}
+				break;			
 			default:  /* '?' */
 				/* getopt will emit an error message, all we have to do is bail. */
 				return ERROR_FAIL;

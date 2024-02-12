@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
@@ -7,19 +9,6 @@
  *                                                                         *
  *   Copyright (C) 2011 Øyvind Harboe                                      *
  *   oyvind.harboe@zylin.com                                               *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -29,7 +18,7 @@
 #include "imp.h"
 #include <helper/binarybuffer.h>
 #include <target/algorithm.h>
-#include <target/armv7m.h>
+#include <target/cortex_m.h>
 
 /* Regarding performance:
  *
@@ -241,11 +230,11 @@ static int stm32x_otp_enable(struct flash_bank *bank)
 	struct stm32x_flash_bank *stm32x_info = bank->driver_priv;
 
 	if (!stm32x_info->otp_unlocked) {
-		LOG_INFO("OTP memory bank #%u is is enabled for write commands.",
+		LOG_INFO("OTP memory bank #%u is enabled for write commands.",
 			 bank->bank_number);
 		stm32x_info->otp_unlocked = true;
 	} else {
-		LOG_WARNING("OTP memory bank #%u is is already enabled for write commands.",
+		LOG_WARNING("OTP memory bank #%u is already enabled for write commands.",
 			    bank->bank_number);
 	}
 	return ERROR_OK;
@@ -636,8 +625,8 @@ static int stm32x_erase(struct flash_bank *bank, unsigned int first,
 
 	for (unsigned int i = first; i <= last; i++) {
 		unsigned int snb;
-		if (stm32x_info->has_large_mem && i >= 12)
-			snb = (i - 12) | 0x10;
+		if (stm32x_info->has_large_mem && i >= (bank->num_sectors / 2))
+			snb = (i - (bank->num_sectors / 2)) | 0x10;
 		else
 			snb = i;
 
@@ -653,7 +642,6 @@ static int stm32x_erase(struct flash_bank *bank, unsigned int first,
 		if (target->report_flash_progress)
 			report_flash_progress("flash_erase_progress", bank->base + bank->sectors[i].offset, bank->base + bank->sectors[i].offset + bank->sectors[i].size, bank->name);
 
-		bank->sectors[i].is_erased = 1;
 	}
 
 	retval = target_write_u32(target, stm32x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_LOCK);
@@ -675,8 +663,10 @@ static int stm32x_protect(struct flash_bank *bank, int set, unsigned int first,
 	}
 
 	if (stm32x_is_otp(bank)) {
-		if (!set)
+		if (!set) {
+			LOG_ERROR("OTP protection can only be enabled");
 			return ERROR_COMMAND_ARGUMENT_INVALID;
+		}
 
 		return stm32x_otp_protect(bank, first, last);
 	}
@@ -867,15 +857,12 @@ static int stm32x_write(struct flash_bank *bank, const uint8_t *buffer,
 	Wait for the BSY bit to be cleared
 	*/
 	while (words_remaining > 0) {
-		uint16_t value;
-		memcpy(&value, buffer + bytes_written, sizeof(uint16_t));
-
 		retval = target_write_u32(target, stm32x_get_flash_reg(bank, STM32_FLASH_CR),
 				FLASH_PG | FLASH_PSIZE_16);
 		if (retval != ERROR_OK)
 			return retval;
 
-		retval = target_write_u16(target, address, value);
+		retval = target_write_memory(target, address, 2, 1, buffer + bytes_written);
 		if (retval != ERROR_OK)
 			return retval;
 
@@ -977,25 +964,17 @@ static int stm32x_get_device_id(struct flash_bank *bank, uint32_t *device_id)
 	 * Only effects Rev A silicon */
 
 	struct target *target = bank->target;
-	uint32_t cpuid;
 
 	/* read stm32 device id register */
 	int retval = target_read_u32(target, 0xE0042000, device_id);
 	if (retval != ERROR_OK)
 		return retval;
 
-	if ((*device_id & 0xfff) == 0x411) {
-		/* read CPUID reg to check core type */
-		retval = target_read_u32(target, 0xE000ED00, &cpuid);
-		if (retval != ERROR_OK)
-			return retval;
-
-		/* check for cortex_m4 */
-		if (((cpuid >> 4) & 0xFFF) == 0xC24) {
-			*device_id &= ~((0xFFFF << 16) | 0xfff);
-			*device_id |= (0x1000 << 16) | 0x413;
-			LOG_INFO("stm32f4x errata detected - fixing incorrect MCU_IDCODE");
-		}
+	if ((*device_id & 0xfff) == 0x411
+			&& cortex_m_get_partno_safe(target) == CORTEX_M4_PARTNO) {
+		*device_id &= ~((0xFFFF << 16) | 0xfff);
+		*device_id |= (0x1000 << 16) | 0x413;
+		LOG_INFO("stm32f4x errata detected - fixing incorrect MCU_IDCODE");
 	}
 	return retval;
 }
@@ -1029,6 +1008,11 @@ static int stm32x_probe(struct flash_bank *bank)
 	free(bank->prot_blocks);
 	bank->num_prot_blocks = 0;
 	bank->prot_blocks = NULL;
+
+	if (!target_was_examined(target)) {
+		LOG_ERROR("Target not examined yet");
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
 
 	/* if explicitly called out as OTP bank, short circuit probe */
 	if (stm32x_is_otp(bank)) {
@@ -1153,7 +1137,7 @@ static int stm32x_probe(struct flash_bank *bank)
 		flash_size_in_kb = stm32x_info->user_bank_size / 1024;
 	}
 
-	LOG_INFO("flash size = %" PRIu16 " kbytes", flash_size_in_kb);
+	LOG_INFO("flash size = %" PRIu16 " KiB", flash_size_in_kb);
 
 	/* did we assign flash size? */
 	assert(flash_size_in_kb != 0xffff);
@@ -1260,7 +1244,7 @@ static int stm32x_auto_probe(struct flash_bank *bank)
 	return stm32x_probe(bank);
 }
 
-static int get_stm32x_info(struct flash_bank *bank, char *buf, int buf_size)
+static int get_stm32x_info(struct flash_bank *bank, struct command_invocation *cmd)
 {
 	uint32_t dbgmcu_idcode;
 
@@ -1425,14 +1409,14 @@ static int get_stm32x_info(struct flash_bank *bank, char *buf, int buf_size)
 		break;
 
 	default:
-		snprintf(buf, buf_size, "Cannot identify target as a STM32F2/4/7\n");
+		command_print_sameline(cmd, "Cannot identify target as a STM32F2/4/7\n");
 		return ERROR_FAIL;
 	}
 
-	if (rev_str != NULL)
-		snprintf(buf, buf_size, "%s - Rev: %s", device_str, rev_str);
+	if (rev_str)
+		command_print_sameline(cmd, "%s - Rev: %s", device_str, rev_str);
 	else
-		snprintf(buf, buf_size, "%s - Rev: unknown (0x%04" PRIx16 ")", device_str, rev_id);
+		command_print_sameline(cmd, "%s - Rev: unknown (0x%04" PRIx16 ")", device_str, rev_id);
 
 	return ERROR_OK;
 }
@@ -1447,7 +1431,7 @@ COMMAND_HANDLER(stm32x_handle_lock_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	stm32x_info = bank->driver_priv;
@@ -1486,7 +1470,7 @@ COMMAND_HANDLER(stm32x_handle_unlock_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	stm32x_info = bank->driver_priv;
@@ -1573,15 +1557,11 @@ COMMAND_HANDLER(stm32x_handle_mass_erase_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	retval = stm32x_mass_erase(bank);
 	if (retval == ERROR_OK) {
-		/* set all sectors as erased */
-		for (unsigned int i = 0; i < bank->num_sectors; i++)
-			bank->sectors[i].is_erased = 1;
-
 		command_print(CMD, "stm32x mass erase complete");
 	} else {
 		command_print(CMD, "stm32x mass erase failed");
@@ -1602,11 +1582,11 @@ COMMAND_HANDLER(stm32f2x_handle_options_read_command)
 	}
 
 	retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	retval = stm32x_read_options(bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	stm32x_info = bank->driver_priv;
@@ -1648,11 +1628,11 @@ COMMAND_HANDLER(stm32f2x_handle_options_write_command)
 	}
 
 	retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	retval = stm32x_read_options(bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	stm32x_info = bank->driver_priv;
@@ -1710,7 +1690,7 @@ COMMAND_HANDLER(stm32f2x_handle_optcr2_write_command)
 	}
 
 	retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	stm32x_info = bank->driver_priv;
@@ -1724,7 +1704,7 @@ COMMAND_HANDLER(stm32f2x_handle_optcr2_write_command)
 				" finally unlock it. Clears PCROP and mass erases flash.");
 
 	retval = stm32x_read_options(bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], optcr2_pcrop);
@@ -1748,7 +1728,7 @@ COMMAND_HANDLER(stm32x_handle_otp_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 	if (stm32x_is_otp(bank)) {
 		if (strcmp(CMD_ARGV[1], "enable") == 0) {
@@ -1770,7 +1750,7 @@ COMMAND_HANDLER(stm32x_handle_otp_command)
 	return retval;
 }
 
-static const struct command_registration stm32x_exec_command_handlers[] = {
+static const struct command_registration stm32f2x_exec_command_handlers[] = {
 	{
 		.name = "lock",
 		.handler = stm32x_handle_lock_command,
@@ -1823,20 +1803,20 @@ static const struct command_registration stm32x_exec_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-static const struct command_registration stm32x_command_handlers[] = {
+static const struct command_registration stm32f2x_command_handlers[] = {
 	{
 		.name = "stm32f2x",
 		.mode = COMMAND_ANY,
 		.help = "stm32f2x flash command group",
 		.usage = "",
-		.chain = stm32x_exec_command_handlers,
+		.chain = stm32f2x_exec_command_handlers,
 	},
 	COMMAND_REGISTRATION_DONE
 };
 
 const struct flash_driver stm32f2x_flash = {
 	.name = "stm32f2x",
-	.commands = stm32x_command_handlers,
+	.commands = stm32f2x_command_handlers,
 	.flash_bank_command = stm32x_flash_bank_command,
 	.erase = stm32x_erase,
 	.protect = stm32x_protect,

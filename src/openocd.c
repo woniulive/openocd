@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
@@ -7,19 +9,6 @@
  *                                                                         *
  *   Copyright (C) 2008 Richard Missenden                                  *
  *   richard.missenden@googlemail.com                                      *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -27,7 +16,7 @@
 #endif
 
 #include "openocd.h"
-#include <jtag/driver.h>
+#include <jtag/adapter.h>
 #include <jtag/jtag.h>
 #include <transport/transport.h>
 #include <helper/util.h>
@@ -62,24 +51,23 @@ static const char openocd_startup_tcl[] = {
 };
 
 /* Give scripts and TELNET a way to find out what version this is */
-static int jim_version_command(Jim_Interp *interp, int argc,
-	Jim_Obj * const *argv)
+COMMAND_HANDLER(handler_version_command)
 {
-	if (argc > 2)
-		return JIM_ERR;
-	const char *str = "";
-	char *version_str;
-	version_str = OPENOCD_VERSION;
+	char *version_str = OPENOCD_VERSION;
 
-	if (argc == 2)
-		str = Jim_GetString(argv[1], NULL);
+	if (CMD_ARGC > 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	if (strcmp("git", str) == 0)
+	if (CMD_ARGC == 1) {
+		if (strcmp("git", CMD_ARGV[0]))
+			return ERROR_COMMAND_ARGUMENT_INVALID;
+
 		version_str = GITVERSION;
+	}
 
-	Jim_SetResult(interp, Jim_NewStringObj(interp, version_str, -1));
+	command_print(CMD, "%s", version_str);
 
-	return JIM_OK;
+	return ERROR_OK;
 }
 
 static int log_target_callback_event_handler(struct target *target,
@@ -130,8 +118,10 @@ COMMAND_HANDLER(handle_init_command)
 
 	initialized = 1;
 
+	bool save_poll_mask = jtag_poll_mask();
+
 	retval = command_run_line(CMD_CTX, "target init");
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return ERROR_FAIL;
 
 	retval = adapter_init(CMD_CTX);
@@ -150,11 +140,11 @@ COMMAND_HANDLER(handle_init_command)
 	command_context_mode(CMD_CTX, COMMAND_EXEC);
 
 	retval = command_run_line(CMD_CTX, "transport init");
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return ERROR_FAIL;
 
 	retval = command_run_line(CMD_CTX, "dap init");
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return ERROR_FAIL;
 
 	LOG_DEBUG("Examining targets...");
@@ -177,10 +167,15 @@ COMMAND_HANDLER(handle_init_command)
 	if (command_run_line(CMD_CTX, "tpiu init") != ERROR_OK)
 		return ERROR_FAIL;
 
+	jtag_poll_unmask(save_poll_mask);
+
 	/* initialize telnet subsystem */
 	gdb_target_add_all(all_targets);
 
 	target_register_event_callback(log_target_callback_event_handler, CMD_CTX);
+
+	if (command_run_line(CMD_CTX, "_run_post_init_commands") != ERROR_OK)
+		return ERROR_FAIL;
 
 	return ERROR_OK;
 }
@@ -198,9 +193,10 @@ COMMAND_HANDLER(handle_add_script_search_dir_command)
 static const struct command_registration openocd_command_handlers[] = {
 	{
 		.name = "version",
-		.jim_handler = jim_version_command,
+		.handler = handler_version_command,
 		.mode = COMMAND_ANY,
 		.help = "show program version",
+		.usage = "[git]",
 	},
 	{
 		.name = "noinit",
@@ -252,7 +248,7 @@ static struct command_context *setup_command_handler(Jim_Interp *interp)
 		&log_register_commands,
 		&rtt_server_register_commands,
 		&transport_register_commands,
-		&interface_register_commands,
+		&adapter_register_commands,
 		&target_register_commands,
 		&flash_register_commands,
 		&nand_register_commands,
@@ -262,9 +258,9 @@ static struct command_context *setup_command_handler(Jim_Interp *interp)
 		&arm_tpiu_swo_register_commands,
 		NULL
 	};
-	for (unsigned i = 0; NULL != command_registrants[i]; i++) {
+	for (unsigned i = 0; command_registrants[i]; i++) {
 		int retval = (*command_registrants[i])(cmd_ctx);
-		if (ERROR_OK != retval) {
+		if (retval != ERROR_OK) {
 			command_done(cmd_ctx);
 			return NULL;
 		}
@@ -304,12 +300,12 @@ static int openocd_thread(int argc, char *argv[], struct command_context *cmd_ct
 	}
 
 	ret = server_init(cmd_ctx);
-	if (ERROR_OK != ret)
+	if (ret != ERROR_OK)
 		return ERROR_FAIL;
 
 	if (init_at_startup) {
 		ret = command_run_line(cmd_ctx, "init");
-		if (ERROR_OK != ret) {
+		if (ret != ERROR_OK) {
 			server_quit();
 			return ERROR_FAIL;
 		}
@@ -362,10 +358,11 @@ int openocd_main(int argc, char *argv[])
 	server_free();
 
 	unregister_all_commands(cmd_ctx, NULL);
+	help_del_all_commands(cmd_ctx);
 
 	/* free all DAP and CTI objects */
-	dap_cleanup_all();
 	arm_cti_cleanup_all();
+	dap_cleanup_all();
 
 	adapter_quit();
 
@@ -377,9 +374,11 @@ int openocd_main(int argc, char *argv[])
 	rtt_exit();
 	free_config();
 
-	if (ERROR_FAIL == ret)
+	log_exit();
+
+	if (ret == ERROR_FAIL)
 		return EXIT_FAILURE;
-	else if (ERROR_OK != ret)
+	else if (ret != ERROR_OK)
 		exit_on_signal(ret);
 
 	return ret;

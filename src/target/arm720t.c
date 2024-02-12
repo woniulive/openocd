@@ -1,22 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
  *                                                                         *
  *   Copyright (C) 2009 by Øyvind Harboe                                   *
  *   oyvind.harboe@zylin.com                                               *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -389,11 +378,11 @@ static void arm720t_deinit_target(struct target *target)
 /* FIXME remove forward decls */
 static int arm720t_mrc(struct target *target, int cpnum,
 		uint32_t op1, uint32_t op2,
-		uint32_t CRn, uint32_t CRm,
+		uint32_t crn, uint32_t crm,
 		uint32_t *value);
 static int arm720t_mcr(struct target *target, int cpnum,
 		uint32_t op1, uint32_t op2,
-		uint32_t CRn, uint32_t CRm,
+		uint32_t crn, uint32_t crm,
 		uint32_t value);
 
 static int arm720t_init_arch_info(struct target *target,
@@ -427,13 +416,13 @@ static int arm720t_target_create(struct target *target, Jim_Interp *interp)
 {
 	struct arm720t_common *arm720t = calloc(1, sizeof(*arm720t));
 
-	arm720t->arm7_9_common.arm.is_armv4 = true;
+	arm720t->arm7_9_common.arm.arch = ARM_ARCH_V4;
 	return arm720t_init_arch_info(target, arm720t, target->tap);
 }
 
 static int arm720t_mrc(struct target *target, int cpnum,
 		uint32_t op1, uint32_t op2,
-		uint32_t CRn, uint32_t CRm,
+		uint32_t crn, uint32_t crm,
 		uint32_t *value)
 {
 	if (cpnum != 15) {
@@ -443,14 +432,14 @@ static int arm720t_mrc(struct target *target, int cpnum,
 
 	/* read "to" r0 */
 	return arm720t_read_cp15(target,
-			ARMV4_5_MRC(cpnum, op1, 0, CRn, CRm, op2),
+			ARMV4_5_MRC(cpnum, op1, 0, crn, crm, op2),
 			value);
 
 }
 
 static int arm720t_mcr(struct target *target, int cpnum,
 		uint32_t op1, uint32_t op2,
-		uint32_t CRn, uint32_t CRm,
+		uint32_t crn, uint32_t crm,
 		uint32_t value)
 {
 	if (cpnum != 15) {
@@ -460,7 +449,7 @@ static int arm720t_mcr(struct target *target, int cpnum,
 
 	/* write "from" r0 */
 	return arm720t_write_cp15(target,
-			ARMV4_5_MCR(cpnum, op1, 0, CRn, CRm, op2),
+			ARMV4_5_MCR(cpnum, op1, 0, crn, crm, op2),
 			value);
 }
 

@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2011 by Broadcom Corporation                            *
  *   Evan Hunter - ehunter@broadcom.com                                    *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifndef OPENOCD_RTOS_RTOS_H
@@ -21,7 +10,7 @@
 
 #include "server/server.h"
 #include "target/target.h"
-#include <jim-nvp.h>
+#include <helper/jim-nvp.h>
 
 typedef int64_t threadid_t;
 typedef int64_t symbol_address_t;
@@ -82,6 +71,13 @@ struct rtos_type {
 	int (*clean)(struct target *target);
 	char * (*ps_command)(struct target *target);
 	int (*set_reg)(struct rtos *rtos, uint32_t reg_num, uint8_t *reg_value);
+	/* Implement these if different threads in the RTOS can see memory
+	 * differently (for instance because address translation might be different
+	 * for each thread). */
+	int (*read_buffer)(struct rtos *rtos, target_addr_t address, uint32_t size,
+			uint8_t *buffer);
+	int (*write_buffer)(struct rtos *rtos, target_addr_t address, uint32_t size,
+			const uint8_t *buffer);
     int (*step_hook)(struct target *target, int current, uint32_t address, int handle_breakpoints);
 };
 
@@ -102,16 +98,23 @@ struct rtos_register_stacking {
 	 * just use stacking->stack_registers_size * stack_growth_direction
 	 * to calculate adjustment.
 	 */
-	int64_t (*calculate_process_stack)(struct target *target,
+	target_addr_t (*calculate_process_stack)(struct target *target,
 		const uint8_t *stack_data,
 		const struct rtos_register_stacking *stacking,
-		int64_t stack_ptr);
+		target_addr_t stack_ptr);
 	const struct stack_register_offset *register_offsets;
+	/* Optional field for targets which may have to implement their own stack read function.
+	 * Because stack format can be weird or stack data needed to be edited before passing to the gdb.
+	 */
+	int (*read_stack)(struct target *target,
+		int64_t stack_ptr,
+		const struct rtos_register_stacking *stacking,
+		uint8_t *stack_data);
 };
 
 #define GDB_THREAD_PACKET_NOT_CONSUMED (-40)
 
-int rtos_create(Jim_GetOptInfo *goi, struct target *target);
+int rtos_create(struct jim_getopt_info *goi, struct target *target);
 void rtos_destroy(struct target *target);
 int rtos_set_reg(struct connection *connection, int reg_num,
 		uint8_t *reg_value);
@@ -121,6 +124,7 @@ int rtos_generic_stack_read(struct target *target,
 		struct rtos_reg **reg_list,
 		int *num_regs);
 int gdb_thread_packet(struct connection *connection, char const *packet, int packet_size);
+int rtos_thread_packet(struct connection *connection, const char *packet, int packet_size);
 int rtos_get_gdb_reg(struct connection *connection, int reg_num);
 int rtos_get_gdb_reg_list(struct connection *connection);
 int rtos_update_threads(struct target *target);
@@ -128,5 +132,24 @@ void rtos_free_threadlist(struct rtos *rtos);
 int rtos_smp_init(struct target *target);
 /*  function for handling symbol access */
 int rtos_qsymbol(struct connection *connection, char const *packet, int packet_size);
+int rtos_read_buffer(struct target *target, target_addr_t address,
+		uint32_t size, uint8_t *buffer);
+int rtos_write_buffer(struct target *target, target_addr_t address,
+		uint32_t size, const uint8_t *buffer);
+
+extern const struct rtos_type chibios_rtos;
+extern const struct rtos_type chromium_ec_rtos;
+extern const struct rtos_type ecos_rtos;
+extern const struct rtos_type embkernel_rtos;
+extern const struct rtos_type freertos_rtos;
+extern const struct rtos_type hwthread_rtos;
+extern const struct rtos_type linux_rtos;
+extern const struct rtos_type mqx_rtos;
+extern const struct rtos_type nuttx_rtos;
+extern const struct rtos_type riot_rtos;
+extern const struct rtos_type rtkernel_rtos;
+extern const struct rtos_type threadx_rtos;
+extern const struct rtos_type ucos_iii_rtos;
+extern const struct rtos_type zephyr_rtos;
 
 #endif /* OPENOCD_RTOS_RTOS_H */

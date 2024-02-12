@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
@@ -11,25 +13,13 @@
  *                                                                         *
  *   Copyright (C) 2009 Zachary T Welch                                    *
  *   zw@superlucidity.net                                                  *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
+#include "adapter.h"
 #include "jtag.h"
 #include "swd.h"
 #include "minidriver.h"
@@ -41,6 +31,8 @@
 #include <strings.h>
 #endif
 
+#include <helper/command.h>
+#include <helper/nvp.h>
 #include <helper/time_support.h>
 #include "transport/transport.h"
 
@@ -49,7 +41,7 @@
  * Holds support for accessing JTAG-specific mechanisms from TCl scripts.
  */
 
-static const Jim_Nvp nvp_jtag_tap_event[] = {
+static const struct jim_nvp nvp_jtag_tap_event[] = {
 	{ .value = JTAG_TRST_ASSERTED,          .name = "post-reset" },
 	{ .value = JTAG_TAP_EVENT_SETUP,        .name = "setup" },
 	{ .value = JTAG_TAP_EVENT_ENABLE,       .name = "tap-enable" },
@@ -62,9 +54,9 @@ struct jtag_tap *jtag_tap_by_jim_obj(Jim_Interp *interp, Jim_Obj *o)
 {
 	const char *cp = Jim_GetString(o, NULL);
 	struct jtag_tap *t = cp ? jtag_tap_by_string(cp) : NULL;
-	if (NULL == cp)
+	if (!cp)
 		cp = "(unknown)";
-	if (NULL == t)
+	if (!t)
 		Jim_SetResultFormatted(interp, "Tap '%s' could not be found", cp);
 	return t;
 }
@@ -82,195 +74,145 @@ static bool scan_is_safe(tap_state_t state)
 	}
 }
 
-static int Jim_Command_drscan(Jim_Interp *interp, int argc, Jim_Obj *const *args)
+static COMMAND_HELPER(handle_jtag_command_drscan_fields, struct scan_field *fields)
 {
-	int retval;
-	struct scan_field *fields;
-	int num_fields;
-	int field_count = 0;
-	int i, e;
-	struct jtag_tap *tap;
-	tap_state_t endstate;
-
-	/* args[1] = device
-	 * args[2] = num_bits
-	 * args[3] = hex string
-	 * ... repeat num bits and hex string ...
-	 *
-	 * .. optionally:
-	*     args[N-2] = "-endstate"
-	 *     args[N-1] = statename
-	 */
-	if ((argc < 4) || ((argc % 2) != 0)) {
-		Jim_WrongNumArgs(interp, 1, args, "wrong arguments");
-		return JIM_ERR;
-	}
-
-	endstate = TAP_IDLE;
-
-	script_debug(interp, argc, args);
-
-	/* validate arguments as numbers */
-	e = JIM_OK;
-	for (i = 2; i < argc; i += 2) {
-		long bits;
-		const char *cp;
-
-		e = Jim_GetLong(interp, args[i], &bits);
-		/* If valid - try next arg */
-		if (e == JIM_OK)
-			continue;
-
-		/* Not valid.. are we at the end? */
-		if (((i + 2) != argc)) {
-			/* nope, then error */
-			return e;
-		}
-
-		/* it could be: "-endstate FOO"
-		 * e.g. DRPAUSE so we can issue more instructions
-		 * before entering RUN/IDLE and executing them.
-		 */
-
-		/* get arg as a string. */
-		cp = Jim_GetString(args[i], NULL);
-		/* is it the magic? */
-		if (0 == strcmp("-endstate", cp)) {
-			/* is the statename valid? */
-			cp = Jim_GetString(args[i + 1], NULL);
-
-			/* see if it is a valid state name */
-			endstate = tap_state_by_name(cp);
-			if (endstate < 0) {
-				/* update the error message */
-				Jim_SetResultFormatted(interp, "endstate: %s invalid", cp);
-			} else {
-				if (!scan_is_safe(endstate))
-					LOG_WARNING("drscan with unsafe "
-						"endstate \"%s\"", cp);
-
-				/* valid - so clear the error */
-				e = JIM_OK;
-				/* and remove the last 2 args */
-				argc -= 2;
-			}
-		}
-
-		/* Still an error? */
-		if (e != JIM_OK)
-			return e;	/* too bad */
-	}	/* validate args */
-
-	assert(e == JIM_OK);
-
-	tap = jtag_tap_by_jim_obj(interp, args[1]);
-	if (tap == NULL)
-		return JIM_ERR;
-
-	num_fields = (argc-2)/2;
-	if (num_fields <= 0) {
-		Jim_SetResultString(interp, "drscan: no scan fields supplied", -1);
-		return JIM_ERR;
-	}
-	fields = malloc(sizeof(struct scan_field) * num_fields);
-	for (i = 2; i < argc; i += 2) {
-		long bits;
-		int len;
-		const char *str;
-
-		Jim_GetLong(interp, args[i], &bits);
-		str = Jim_GetString(args[i + 1], &len);
-
+	unsigned int field_count = 0;
+	for (unsigned int i = 1; i < CMD_ARGC; i += 2) {
+		unsigned int bits;
+		COMMAND_PARSE_NUMBER(uint, CMD_ARGV[i], bits);
 		fields[field_count].num_bits = bits;
+
 		void *t = malloc(DIV_ROUND_UP(bits, 8));
+		if (!t) {
+			LOG_ERROR("Out of memory");
+			return ERROR_FAIL;
+		}
 		fields[field_count].out_value = t;
-		str_to_buf(str, len, t, bits, 0);
+		str_to_buf(CMD_ARGV[i + 1], strlen(CMD_ARGV[i + 1]), t, bits, 0);
 		fields[field_count].in_value = t;
 		field_count++;
 	}
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(handle_jtag_command_drscan)
+{
+	/*
+	 * CMD_ARGV[0] = device
+	 * CMD_ARGV[1] = num_bits
+	 * CMD_ARGV[2] = hex string
+	 * ... repeat num bits and hex string ...
+	 *
+	 * ... optionally:
+	 * CMD_ARGV[CMD_ARGC-2] = "-endstate"
+	 * CMD_ARGV[CMD_ARGC-1] = statename
+	 */
+
+	if (CMD_ARGC < 3 || (CMD_ARGC % 2) != 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct jtag_tap *tap = jtag_tap_by_string(CMD_ARGV[0]);
+	if (!tap) {
+		command_print(CMD, "Tap '%s' could not be found", CMD_ARGV[0]);
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+	}
+
+	if (tap->bypass) {
+		command_print(CMD, "Can't execute as the selected tap is in BYPASS");
+		return ERROR_FAIL;
+	}
+
+	tap_state_t endstate = TAP_IDLE;
+	if (CMD_ARGC > 3 && !strcmp("-endstate", CMD_ARGV[CMD_ARGC - 2])) {
+		const char *state_name = CMD_ARGV[CMD_ARGC - 1];
+		endstate = tap_state_by_name(state_name);
+		if (endstate < 0) {
+			command_print(CMD, "endstate: %s invalid", state_name);
+			return ERROR_COMMAND_ARGUMENT_INVALID;
+		}
+
+		if (!scan_is_safe(endstate))
+			LOG_WARNING("drscan with unsafe endstate \"%s\"", state_name);
+
+		CMD_ARGC -= 2;
+	}
+
+	unsigned int num_fields = (CMD_ARGC - 1) / 2;
+	struct scan_field *fields = calloc(num_fields, sizeof(struct scan_field));
+	if (!fields) {
+		LOG_ERROR("Out of memory");
+		return ERROR_FAIL;
+	}
+
+	int retval = CALL_COMMAND_HANDLER(handle_jtag_command_drscan_fields, fields);
+	if (retval != ERROR_OK)
+		goto fail;
 
 	jtag_add_dr_scan(tap, num_fields, fields, endstate);
 
 	retval = jtag_execute_queue();
 	if (retval != ERROR_OK) {
-		Jim_SetResultString(interp, "drscan: jtag execute failed", -1);
-
-		for (i = 0; i < field_count; i++)
-			free(fields[i].in_value);
-		free(fields);
-
-		return JIM_ERR;
+		command_print(CMD, "drscan: jtag execute failed");
+		goto fail;
 	}
 
-	field_count = 0;
-	Jim_Obj *list = Jim_NewListObj(interp, NULL, 0);
-	for (i = 2; i < argc; i += 2) {
-		long bits;
-		char *str;
-
-		Jim_GetLong(interp, args[i], &bits);
-		str = buf_to_hex_str(fields[field_count].in_value, bits);
-		free(fields[field_count].in_value);
-
-		Jim_ListAppendElement(interp, list, Jim_NewStringObj(interp, str, strlen(str)));
+	for (unsigned int i = 0; i < num_fields; i++) {
+		char *str = buf_to_hex_str(fields[i].in_value, fields[i].num_bits);
+		command_print(CMD, "%s", str);
 		free(str);
-		field_count++;
 	}
 
-	Jim_SetResult(interp, list);
-
+fail:
+	for (unsigned int i = 0; i < num_fields; i++)
+		free(fields[i].in_value);
 	free(fields);
 
-	return JIM_OK;
+	return retval;
 }
 
-
-static int Jim_Command_pathmove(Jim_Interp *interp, int argc, Jim_Obj *const *args)
+COMMAND_HANDLER(handle_jtag_command_pathmove)
 {
 	tap_state_t states[8];
 
-	if ((argc < 2) || ((size_t)argc > (ARRAY_SIZE(states) + 1))) {
-		Jim_WrongNumArgs(interp, 1, args, "wrong arguments");
-		return JIM_ERR;
-	}
+	if (CMD_ARGC < 1 || CMD_ARGC > ARRAY_SIZE(states))
+		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	script_debug(interp, argc, args);
-
-	int i;
-	for (i = 0; i < argc-1; i++) {
-		const char *cp;
-		cp = Jim_GetString(args[i + 1], NULL);
-		states[i] = tap_state_by_name(cp);
+	for (unsigned int i = 0; i < CMD_ARGC; i++) {
+		states[i] = tap_state_by_name(CMD_ARGV[i]);
 		if (states[i] < 0) {
-			/* update the error message */
-			Jim_SetResultFormatted(interp, "endstate: %s invalid", cp);
-			return JIM_ERR;
+			command_print(CMD, "endstate: %s invalid", CMD_ARGV[i]);
+			return ERROR_COMMAND_ARGUMENT_INVALID;
 		}
 	}
 
-	if ((jtag_add_statemove(states[0]) != ERROR_OK) || (jtag_execute_queue() != ERROR_OK)) {
-		Jim_SetResultString(interp, "pathmove: jtag execute failed", -1);
-		return JIM_ERR;
+	int retval = jtag_add_statemove(states[0]);
+	if (retval == ERROR_OK)
+		retval = jtag_execute_queue();
+	if (retval != ERROR_OK) {
+		command_print(CMD, "pathmove: jtag execute failed");
+		return retval;
 	}
 
-	jtag_add_pathmove(argc - 2, states + 1);
-
-	if (jtag_execute_queue() != ERROR_OK) {
-		Jim_SetResultString(interp, "pathmove: failed", -1);
-		return JIM_ERR;
+	jtag_add_pathmove(CMD_ARGC - 1, states + 1);
+	retval = jtag_execute_queue();
+	if (retval != ERROR_OK) {
+		command_print(CMD, "pathmove: failed");
+		return retval;
 	}
 
-	return JIM_OK;
+	return ERROR_OK;
 }
 
-
-static int Jim_Command_flush_count(Jim_Interp *interp, int argc, Jim_Obj *const *args)
+COMMAND_HANDLER(handle_jtag_flush_count)
 {
-	script_debug(interp, argc, args);
+	if (CMD_ARGC != 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	Jim_SetResult(interp, Jim_NewIntObj(interp, jtag_get_flush_queue_count()));
+	int count = jtag_get_flush_queue_count();
+	command_print_sameline(CMD, "%d", count);
 
-	return JIM_OK;
+	return ERROR_OK;
 }
 
 /* REVISIT Just what about these should "move" ... ?
@@ -287,22 +229,23 @@ static const struct command_registration jtag_command_handlers_to_move[] = {
 	{
 		.name = "drscan",
 		.mode = COMMAND_EXEC,
-		.jim_handler = Jim_Command_drscan,
+		.handler = handle_jtag_command_drscan,
 		.help = "Execute Data Register (DR) scan for one TAP.  "
 			"Other TAPs must be in BYPASS mode.",
-		.usage = "tap_name [num_bits value]* ['-endstate' state_name]",
+		.usage = "tap_name (num_bits value)+ ['-endstate' state_name]",
 	},
 	{
 		.name = "flush_count",
 		.mode = COMMAND_EXEC,
-		.jim_handler = Jim_Command_flush_count,
+		.handler = handle_jtag_flush_count,
 		.help = "Returns the number of times the JTAG queue "
 			"has been flushed.",
+		.usage = "",
 	},
 	{
 		.name = "pathmove",
 		.mode = COMMAND_EXEC,
-		.jim_handler = Jim_Command_pathmove,
+		.handler = handle_jtag_command_pathmove,
 		.usage = "start_state state1 [state2 [state3 ...]]",
 		.help = "Move JTAG state machine from current state "
 			"(start_state) to state1, then state2, state3, etc.",
@@ -316,24 +259,24 @@ enum jtag_tap_cfg_param {
 	JCFG_IDCODE,
 };
 
-static Jim_Nvp nvp_config_opts[] = {
+static struct jim_nvp nvp_config_opts[] = {
 	{ .name = "-event",      .value = JCFG_EVENT },
 	{ .name = "-idcode",     .value = JCFG_IDCODE },
 
 	{ .name = NULL,          .value = -1 }
 };
 
-static int jtag_tap_configure_event(Jim_GetOptInfo *goi, struct jtag_tap *tap)
+static int jtag_tap_configure_event(struct jim_getopt_info *goi, struct jtag_tap *tap)
 {
 	if (goi->argc == 0) {
 		Jim_WrongNumArgs(goi->interp, goi->argc, goi->argv, "-event <event-name> ...");
 		return JIM_ERR;
 	}
 
-	Jim_Nvp *n;
-	int e = Jim_GetOpt_Nvp(goi, nvp_jtag_tap_event, &n);
+	struct jim_nvp *n;
+	int e = jim_getopt_nvp(goi, nvp_jtag_tap_event, &n);
 	if (e != JIM_OK) {
-		Jim_GetOpt_NvpUnknown(goi, nvp_jtag_tap_event, 1);
+		jim_getopt_nvp_unknown(goi, nvp_jtag_tap_event, 1);
 		return e;
 	}
 
@@ -368,14 +311,14 @@ static int jtag_tap_configure_event(Jim_GetOptInfo *goi, struct jtag_tap *tap)
 	if (goi->isconfigure) {
 		if (!found)
 			jteap = calloc(1, sizeof(*jteap));
-		else if (NULL != jteap->body)
+		else if (jteap->body)
 			Jim_DecrRefCount(goi->interp, jteap->body);
 
 		jteap->interp = goi->interp;
 		jteap->event = n->value;
 
 		Jim_Obj *o;
-		Jim_GetOpt_Obj(goi, &o);
+		jim_getopt_obj(goi, &o);
 		jteap->body = Jim_DuplicateObj(goi->interp, o);
 		Jim_IncrRefCount(jteap->body);
 
@@ -392,16 +335,16 @@ static int jtag_tap_configure_event(Jim_GetOptInfo *goi, struct jtag_tap *tap)
 	return JIM_OK;
 }
 
-static int jtag_tap_configure_cmd(Jim_GetOptInfo *goi, struct jtag_tap *tap)
+static int jtag_tap_configure_cmd(struct jim_getopt_info *goi, struct jtag_tap *tap)
 {
 	/* parse config or cget options */
 	while (goi->argc > 0) {
 		Jim_SetEmptyResult(goi->interp);
 
-		Jim_Nvp *n;
-		int e = Jim_GetOpt_Nvp(goi, nvp_config_opts, &n);
+		struct jim_nvp *n;
+		int e = jim_getopt_nvp(goi, nvp_config_opts, &n);
 		if (e != JIM_OK) {
-			Jim_GetOpt_NvpUnknown(goi, nvp_config_opts, 0);
+			jim_getopt_nvp_unknown(goi, nvp_config_opts, 0);
 			return e;
 		}
 
@@ -435,39 +378,6 @@ static int jtag_tap_configure_cmd(Jim_GetOptInfo *goi, struct jtag_tap *tap)
 	return JIM_OK;
 }
 
-static int is_bad_irval(int ir_length, jim_wide w)
-{
-	jim_wide v = 1;
-
-	v <<= ir_length;
-	v -= 1;
-	v = ~v;
-	return (w & v) != 0;
-}
-
-static int jim_newtap_expected_id(Jim_Nvp *n, Jim_GetOptInfo *goi,
-	struct jtag_tap *pTap)
-{
-	jim_wide w;
-	int e = Jim_GetOpt_Wide(goi, &w);
-	if (e != JIM_OK) {
-		Jim_SetResultFormatted(goi->interp, "option: %s bad parameter", n->name);
-		return e;
-	}
-
-	uint32_t *p = realloc(pTap->expected_ids,
-			      (pTap->expected_ids_cnt + 1) * sizeof(uint32_t));
-	if (!p) {
-		Jim_SetResultFormatted(goi->interp, "no memory");
-		return JIM_ERR;
-	}
-
-	pTap->expected_ids = p;
-	pTap->expected_ids[pTap->expected_ids_cnt++] = w;
-
-	return JIM_OK;
-}
-
 #define NTAP_OPT_IRLEN     0
 #define NTAP_OPT_IRMASK    1
 #define NTAP_OPT_IRCAPTURE 2
@@ -475,170 +385,157 @@ static int jim_newtap_expected_id(Jim_Nvp *n, Jim_GetOptInfo *goi,
 #define NTAP_OPT_DISABLED  4
 #define NTAP_OPT_EXPECTED_ID 5
 #define NTAP_OPT_VERSION   6
+#define NTAP_OPT_BYPASS    7
 
-static int jim_newtap_ir_param(Jim_Nvp *n, Jim_GetOptInfo *goi,
-	struct jtag_tap *pTap)
+static const struct nvp jtag_newtap_opts[] = {
+	{ .name = "-irlen",          .value = NTAP_OPT_IRLEN },
+	{ .name = "-irmask",         .value = NTAP_OPT_IRMASK },
+	{ .name = "-ircapture",      .value = NTAP_OPT_IRCAPTURE },
+	{ .name = "-enable",         .value = NTAP_OPT_ENABLED },
+	{ .name = "-disable",        .value = NTAP_OPT_DISABLED },
+	{ .name = "-expected-id",    .value = NTAP_OPT_EXPECTED_ID },
+	{ .name = "-ignore-version", .value = NTAP_OPT_VERSION },
+	{ .name = "-ignore-bypass",  .value = NTAP_OPT_BYPASS },
+	{ .name = NULL,              .value = -1 },
+};
+
+static COMMAND_HELPER(handle_jtag_newtap_args, struct jtag_tap *tap)
 {
-	jim_wide w;
-	int e = Jim_GetOpt_Wide(goi, &w);
-	if (e != JIM_OK) {
-		Jim_SetResultFormatted(goi->interp,
-			"option: %s bad parameter", n->name);
-		return e;
+	/* we expect CHIP + TAP + OPTIONS */
+	if (CMD_ARGC < 2)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	tap->chip = strdup(CMD_ARGV[0]);
+	tap->tapname = strdup(CMD_ARGV[1]);
+	tap->dotted_name = alloc_printf("%s.%s", CMD_ARGV[0], CMD_ARGV[1]);
+	if (!tap->chip || !tap->tapname || !tap->dotted_name) {
+		LOG_ERROR("Out of memory");
+		return ERROR_FAIL;
 	}
-	switch (n->value) {
-	    case NTAP_OPT_IRLEN:
-		    if (w > (jim_wide) (8 * sizeof(pTap->ir_capture_value))) {
-			    LOG_WARNING("%s: huge IR length %d",
-				    pTap->dotted_name, (int) w);
-		    }
-		    pTap->ir_length = w;
-		    break;
-	    case NTAP_OPT_IRMASK:
-		    if (is_bad_irval(pTap->ir_length, w)) {
-			    LOG_ERROR("%s: IR mask %x too big",
-				    pTap->dotted_name,
-				    (int) w);
-			    return JIM_ERR;
-		    }
-		    if ((w & 3) != 3)
-			    LOG_WARNING("%s: nonstandard IR mask", pTap->dotted_name);
-		    pTap->ir_capture_mask = w;
-		    break;
-	    case NTAP_OPT_IRCAPTURE:
-		    if (is_bad_irval(pTap->ir_length, w)) {
-			    LOG_ERROR("%s: IR capture %x too big",
-				    pTap->dotted_name, (int) w);
-			    return JIM_ERR;
-		    }
-		    if ((w & 3) != 1)
-			    LOG_WARNING("%s: nonstandard IR value",
-				    pTap->dotted_name);
-		    pTap->ir_capture_value = w;
-		    break;
-	    default:
-		    return JIM_ERR;
-	}
-	return JIM_OK;
-}
-
-static int jim_newtap_cmd(Jim_GetOptInfo *goi)
-{
-	struct jtag_tap *pTap;
-	int x;
-	int e;
-	Jim_Nvp *n;
-	char *cp;
-	const Jim_Nvp opts[] = {
-		{ .name = "-irlen",       .value = NTAP_OPT_IRLEN },
-		{ .name = "-irmask",       .value = NTAP_OPT_IRMASK },
-		{ .name = "-ircapture",       .value = NTAP_OPT_IRCAPTURE },
-		{ .name = "-enable",       .value = NTAP_OPT_ENABLED },
-		{ .name = "-disable",       .value = NTAP_OPT_DISABLED },
-		{ .name = "-expected-id",       .value = NTAP_OPT_EXPECTED_ID },
-		{ .name = "-ignore-version",       .value = NTAP_OPT_VERSION },
-		{ .name = NULL,       .value = -1 },
-	};
-
-	pTap = calloc(1, sizeof(struct jtag_tap));
-	if (!pTap) {
-		Jim_SetResultFormatted(goi->interp, "no memory");
-		return JIM_ERR;
-	}
-
-	/*
-	 * we expect CHIP + TAP + OPTIONS
-	 * */
-	if (goi->argc < 3) {
-		Jim_SetResultFormatted(goi->interp, "Missing CHIP TAP OPTIONS ....");
-		free(pTap);
-		return JIM_ERR;
-	}
-
-	const char *tmp;
-	Jim_GetOpt_String(goi, &tmp, NULL);
-	pTap->chip = strdup(tmp);
-
-	Jim_GetOpt_String(goi, &tmp, NULL);
-	pTap->tapname = strdup(tmp);
-
-	/* name + dot + name + null */
-	x = strlen(pTap->chip) + 1 + strlen(pTap->tapname) + 1;
-	cp = malloc(x);
-	sprintf(cp, "%s.%s", pTap->chip, pTap->tapname);
-	pTap->dotted_name = cp;
+	CMD_ARGC -= 2;
+	CMD_ARGV += 2;
 
 	LOG_DEBUG("Creating New Tap, Chip: %s, Tap: %s, Dotted: %s, %d params",
-		pTap->chip, pTap->tapname, pTap->dotted_name, goi->argc);
+		  tap->chip, tap->tapname, tap->dotted_name, CMD_ARGC);
 
-	if (!transport_is_jtag()) {
-		/* SWD doesn't require any JTAG tap parameters */
-		pTap->enabled = true;
-		jtag_tap_init(pTap);
-		return JIM_OK;
-	}
-
-	/* IEEE specifies that the two LSBs of an IR scan are 01, so make
+	/*
+	 * IEEE specifies that the two LSBs of an IR scan are 01, so make
 	 * that the default.  The "-ircapture" and "-irmask" options are only
 	 * needed to cope with nonstandard TAPs, or to specify more bits.
 	 */
-	pTap->ir_capture_mask = 0x03;
-	pTap->ir_capture_value = 0x01;
+	tap->ir_capture_mask = 0x03;
+	tap->ir_capture_value = 0x01;
 
-	while (goi->argc) {
-		e = Jim_GetOpt_Nvp(goi, opts, &n);
-		if (e != JIM_OK) {
-			Jim_GetOpt_NvpUnknown(goi, opts, 0);
-			free(cp);
-			free(pTap);
-			return e;
-		}
-		LOG_DEBUG("Processing option: %s", n->name);
+	while (CMD_ARGC) {
+		const struct nvp *n = nvp_name2value(jtag_newtap_opts, CMD_ARGV[0]);
+		CMD_ARGC--;
+		CMD_ARGV++;
 		switch (n->value) {
-		    case NTAP_OPT_ENABLED:
-			    pTap->disabled_after_reset = false;
-			    break;
-		    case NTAP_OPT_DISABLED:
-			    pTap->disabled_after_reset = true;
-			    break;
-		    case NTAP_OPT_EXPECTED_ID:
-			    e = jim_newtap_expected_id(n, goi, pTap);
-			    if (JIM_OK != e) {
-				    free(cp);
-				    free(pTap);
-				    return e;
-			    }
-			    break;
-		    case NTAP_OPT_IRLEN:
-		    case NTAP_OPT_IRMASK:
-		    case NTAP_OPT_IRCAPTURE:
-			    e = jim_newtap_ir_param(n, goi, pTap);
-			    if (JIM_OK != e) {
-				    free(cp);
-				    free(pTap);
-				    return e;
-			    }
-			    break;
-		    case NTAP_OPT_VERSION:
-			    pTap->ignore_version = true;
-			    break;
-		}	/* switch (n->value) */
-	}	/* while (goi->argc) */
+	    case NTAP_OPT_ENABLED:
+		    tap->disabled_after_reset = false;
+		    break;
 
-	/* default is enabled-after-reset */
-	pTap->enabled = !pTap->disabled_after_reset;
+	    case NTAP_OPT_DISABLED:
+		    tap->disabled_after_reset = true;
+		    break;
 
-	/* Did all the required option bits get cleared? */
-	if (pTap->ir_length != 0) {
-		jtag_tap_init(pTap);
-		return JIM_OK;
+		case NTAP_OPT_EXPECTED_ID:
+			if (!CMD_ARGC)
+				return ERROR_COMMAND_ARGUMENT_INVALID;
+
+			tap->expected_ids = realloc(tap->expected_ids,
+										(tap->expected_ids_cnt + 1) * sizeof(uint32_t));
+			if (!tap->expected_ids) {
+				LOG_ERROR("Out of memory");
+				return ERROR_FAIL;
+			}
+
+			uint32_t id;
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], id);
+			CMD_ARGC--;
+			CMD_ARGV++;
+			tap->expected_ids[tap->expected_ids_cnt++] = id;
+
+			break;
+
+		case NTAP_OPT_IRLEN:
+			if (!CMD_ARGC)
+				return ERROR_COMMAND_ARGUMENT_INVALID;
+
+			COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], tap->ir_length);
+			CMD_ARGC--;
+			CMD_ARGV++;
+			if (tap->ir_length > (int)(8 * sizeof(tap->ir_capture_value)))
+				LOG_WARNING("%s: huge IR length %d", tap->dotted_name, tap->ir_length);
+			break;
+
+		case NTAP_OPT_IRMASK:
+			if (!CMD_ARGC)
+				return ERROR_COMMAND_ARGUMENT_INVALID;
+
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], tap->ir_capture_mask);
+			CMD_ARGC--;
+			CMD_ARGV++;
+			if ((tap->ir_capture_mask & 3) != 3)
+				LOG_WARNING("%s: nonstandard IR mask", tap->dotted_name);
+			break;
+
+		case NTAP_OPT_IRCAPTURE:
+			if (!CMD_ARGC)
+				return ERROR_COMMAND_ARGUMENT_INVALID;
+
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], tap->ir_capture_value);
+			CMD_ARGC--;
+			CMD_ARGV++;
+			if ((tap->ir_capture_value & 3) != 1)
+				LOG_WARNING("%s: nonstandard IR value", tap->dotted_name);
+			break;
+
+		case NTAP_OPT_VERSION:
+			tap->ignore_version = true;
+			break;
+
+		case NTAP_OPT_BYPASS:
+			tap->ignore_bypass = true;
+			break;
+
+		default:
+			nvp_unknown_command_print(CMD, jtag_newtap_opts, NULL, CMD_ARGV[-1]);
+			return ERROR_COMMAND_ARGUMENT_INVALID;
+		}
 	}
 
-	Jim_SetResultFormatted(goi->interp,
-		"newtap: %s missing IR length",
-		pTap->dotted_name);
-	jtag_tap_free(pTap);
-	return JIM_ERR;
+	/* default is enabled-after-reset */
+	tap->enabled = !tap->disabled_after_reset;
+
+	if (transport_is_jtag() && tap->ir_length == 0) {
+		command_print(CMD, "newtap: %s missing IR length", tap->dotted_name);
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+	}
+
+	return ERROR_OK;
+}
+
+__COMMAND_HANDLER(handle_jtag_newtap)
+{
+	struct jtag_tap *tap = calloc(1, sizeof(struct jtag_tap));
+	if (!tap) {
+		LOG_ERROR("Out of memory");
+		return ERROR_FAIL;
+	}
+
+	int retval = CALL_COMMAND_HANDLER(handle_jtag_newtap_args, tap);
+	if (retval != ERROR_OK) {
+		free(tap->chip);
+		free(tap->tapname);
+		free(tap->dotted_name);
+		free(tap->expected_ids);
+		free(tap);
+		return retval;
+	}
+
+	jtag_tap_init(tap);
+	return ERROR_OK;
 }
 
 static void jtag_tap_handle_event(struct jtag_tap *tap, enum jtag_event e)
@@ -646,11 +543,11 @@ static void jtag_tap_handle_event(struct jtag_tap *tap, enum jtag_event e)
 	struct jtag_tap_event_action *jteap;
 	int retval;
 
-	for (jteap = tap->event_action; jteap != NULL; jteap = jteap->next) {
+	for (jteap = tap->event_action; jteap; jteap = jteap->next) {
 		if (jteap->event != e)
 			continue;
 
-		Jim_Nvp *nvp = Jim_Nvp_value2name_simple(nvp_jtag_tap_event, e);
+		struct jim_nvp *nvp = jim_nvp_value2name_simple(nvp_jtag_tap_event, e);
 		LOG_DEBUG("JTAG tap: %s event: %d (%s)\n\taction: %s",
 			tap->dotted_name, e, nvp->name,
 			Jim_GetString(jteap->body, NULL));
@@ -682,62 +579,32 @@ static void jtag_tap_handle_event(struct jtag_tap *tap, enum jtag_event e)
 	}
 }
 
-static int jim_jtag_arp_init(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
+COMMAND_HANDLER(handle_jtag_arp_init)
 {
-	Jim_GetOptInfo goi;
-	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
-	if (goi.argc != 0) {
-		Jim_WrongNumArgs(goi.interp, 1, goi.argv-1, "(no params)");
-		return JIM_ERR;
-	}
-	struct command_context *context = current_command_context(interp);
-	int e = jtag_init_inner(context);
-	if (e != ERROR_OK) {
-		Jim_Obj *eObj = Jim_NewIntObj(goi.interp, e);
-		Jim_IncrRefCount(eObj);
-		Jim_SetResultFormatted(goi.interp, "error: %#s", eObj);
-		Jim_DecrRefCount(goi.interp, eObj);
-		return JIM_ERR;
-	}
-	return JIM_OK;
+	if (CMD_ARGC != 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	return jtag_init_inner(CMD_CTX);
 }
 
-static int jim_jtag_arp_init_reset(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
+COMMAND_HANDLER(handle_jtag_arp_init_reset)
 {
-	int e = ERROR_OK;
-	Jim_GetOptInfo goi;
-	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
-	if (goi.argc != 0) {
-		Jim_WrongNumArgs(goi.interp, 1, goi.argv-1, "(no params)");
-		return JIM_ERR;
-	}
-	struct command_context *context = current_command_context(interp);
+	if (CMD_ARGC != 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
 	if (transport_is_jtag())
-		e = jtag_init_reset(context);
-	else if (transport_is_swd())
-		e = swd_init_reset(context);
+		return jtag_init_reset(CMD_CTX);
 
-	if (e != ERROR_OK) {
-		Jim_Obj *eObj = Jim_NewIntObj(goi.interp, e);
-		Jim_IncrRefCount(eObj);
-		Jim_SetResultFormatted(goi.interp, "error: %#s", eObj);
-		Jim_DecrRefCount(goi.interp, eObj);
-		return JIM_ERR;
-	}
-	return JIM_OK;
-}
+	if (transport_is_swd())
+		return swd_init_reset(CMD_CTX);
 
-int jim_jtag_newtap(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
-{
-	Jim_GetOptInfo goi;
-	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
-	return jim_newtap_cmd(&goi);
+	return ERROR_OK;
 }
 
 static bool jtag_tap_enable(struct jtag_tap *t)
 {
 	if (t->enabled)
-		return false;
+		return true;
 	jtag_tap_handle_event(t, JTAG_TAP_EVENT_ENABLE);
 	if (!t->enabled)
 		return false;
@@ -752,7 +619,7 @@ static bool jtag_tap_enable(struct jtag_tap *t)
 static bool jtag_tap_disable(struct jtag_tap *t)
 {
 	if (!t->enabled)
-		return false;
+		return true;
 	jtag_tap_handle_event(t, JTAG_TAP_EVENT_DISABLE);
 	if (t->enabled)
 		return false;
@@ -765,48 +632,44 @@ static bool jtag_tap_disable(struct jtag_tap *t)
 	return true;
 }
 
-int jim_jtag_tap_enabler(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
+__COMMAND_HANDLER(handle_jtag_tap_enabler)
 {
-	const char *cmd_name = Jim_GetString(argv[0], NULL);
-	Jim_GetOptInfo goi;
-	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
-	if (goi.argc != 1) {
-		Jim_SetResultFormatted(goi.interp, "usage: %s <name>", cmd_name);
-		return JIM_ERR;
+	if (CMD_ARGC != 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct jtag_tap *t = jtag_tap_by_string(CMD_ARGV[0]);
+	if (!t) {
+		command_print(CMD, "Tap '%s' could not be found", CMD_ARGV[0]);
+		return ERROR_COMMAND_ARGUMENT_INVALID;
 	}
 
-	struct jtag_tap *t;
-
-	t = jtag_tap_by_jim_obj(goi.interp, goi.argv[0]);
-	if (t == NULL)
-		return JIM_ERR;
-
-	if (strcasecmp(cmd_name, "tapisenabled") == 0) {
+	if (strcmp(CMD_NAME, "tapisenabled") == 0) {
 		/* do nothing, just return the value */
-	} else if (strcasecmp(cmd_name, "tapenable") == 0) {
+	} else if (strcmp(CMD_NAME, "tapenable") == 0) {
 		if (!jtag_tap_enable(t)) {
-			LOG_WARNING("failed to enable tap %s", t->dotted_name);
-			return JIM_ERR;
+			command_print(CMD, "failed to enable tap %s", t->dotted_name);
+			return ERROR_FAIL;
 		}
-	} else if (strcasecmp(cmd_name, "tapdisable") == 0) {
+	} else if (strcmp(CMD_NAME, "tapdisable") == 0) {
 		if (!jtag_tap_disable(t)) {
-			LOG_WARNING("failed to disable tap %s", t->dotted_name);
-			return JIM_ERR;
+			command_print(CMD, "failed to disable tap %s", t->dotted_name);
+			return ERROR_FAIL;
 		}
 	} else {
-		LOG_ERROR("command '%s' unknown", cmd_name);
-		return JIM_ERR;
+		command_print(CMD, "command '%s' unknown", CMD_NAME);
+		return ERROR_FAIL;
 	}
-	bool e = t->enabled;
-	Jim_SetResult(goi.interp, Jim_NewIntObj(goi.interp, e));
-	return JIM_OK;
+
+	command_print(CMD, "%d", t->enabled ? 1 : 0);
+	return ERROR_OK;
 }
 
 int jim_jtag_configure(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 {
-	const char *cmd_name = Jim_GetString(argv[0], NULL);
-	Jim_GetOptInfo goi;
-	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
+	struct command *c = jim_to_command(interp);
+	const char *cmd_name = c->name;
+	struct jim_getopt_info goi;
+	jim_getopt_setup(&goi, interp, argc-1, argv + 1);
 	goi.isconfigure = !strcmp(cmd_name, "configure");
 	if (goi.argc < 2 + goi.isconfigure) {
 		Jim_WrongNumArgs(goi.interp, 0, NULL,
@@ -817,32 +680,23 @@ int jim_jtag_configure(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 	struct jtag_tap *t;
 
 	Jim_Obj *o;
-	Jim_GetOpt_Obj(&goi, &o);
+	jim_getopt_obj(&goi, &o);
 	t = jtag_tap_by_jim_obj(goi.interp, o);
-	if (t == NULL)
+	if (!t)
 		return JIM_ERR;
 
 	return jtag_tap_configure_cmd(&goi, t);
 }
 
-static int jim_jtag_names(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
+COMMAND_HANDLER(handle_jtag_names)
 {
-	Jim_GetOptInfo goi;
-	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
-	if (goi.argc != 0) {
-		Jim_WrongNumArgs(goi.interp, 1, goi.argv, "Too many parameters");
-		return JIM_ERR;
-	}
-	Jim_SetResult(goi.interp, Jim_NewListObj(goi.interp, NULL, 0));
-	struct jtag_tap *tap;
+	if (CMD_ARGC != 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	for (tap = jtag_all_taps(); tap; tap = tap->next_tap) {
-		Jim_ListAppendElement(goi.interp,
-			Jim_GetResult(goi.interp),
-			Jim_NewStringObj(goi.interp,
-				tap->dotted_name, -1));
-	}
-	return JIM_OK;
+	for (struct jtag_tap *tap = jtag_all_taps(); tap; tap = tap->next_tap)
+		command_print(CMD, "%s", tap->dotted_name);
+
+	return ERROR_OK;
 }
 
 COMMAND_HANDLER(handle_jtag_init_command)
@@ -872,35 +726,38 @@ static const struct command_registration jtag_subcommand_handlers[] = {
 	{
 		.name = "arp_init",
 		.mode = COMMAND_ANY,
-		.jim_handler = jim_jtag_arp_init,
+		.handler = handle_jtag_arp_init,
 		.help = "Validates JTAG scan chain against the list of "
 			"declared TAPs using just the four standard JTAG "
 			"signals.",
+		.usage = "",
 	},
 	{
 		.name = "arp_init-reset",
 		.mode = COMMAND_ANY,
-		.jim_handler = jim_jtag_arp_init_reset,
+		.handler = handle_jtag_arp_init_reset,
 		.help = "Uses TRST and SRST to try resetting everything on "
-			"the JTAG scan chain, then performs 'jtag arp_init'."
+			"the JTAG scan chain, then performs 'jtag arp_init'.",
+		.usage = "",
 	},
 	{
 		.name = "newtap",
 		.mode = COMMAND_CONFIG,
-		.jim_handler = jim_jtag_newtap,
+		.handler = handle_jtag_newtap,
 		.help = "Create a new TAP instance named basename.tap_type, "
 			"and appends it to the scan chain.",
 		.usage = "basename tap_type '-irlen' count "
 			"['-enable'|'-disable'] "
 			"['-expected_id' number] "
 			"['-ignore-version'] "
+			"['-ignore-bypass'] "
 			"['-ircapture' number] "
-			"['-mask' number] ",
+			"['-mask' number]",
 	},
 	{
 		.name = "tapisenabled",
 		.mode = COMMAND_EXEC,
-		.jim_handler = jim_jtag_tap_enabler,
+		.handler = handle_jtag_tap_enabler,
 		.help = "Returns a Tcl boolean (0/1) indicating whether "
 			"the TAP is enabled (1) or not (0).",
 		.usage = "tap_name",
@@ -908,7 +765,7 @@ static const struct command_registration jtag_subcommand_handlers[] = {
 	{
 		.name = "tapenable",
 		.mode = COMMAND_EXEC,
-		.jim_handler = jim_jtag_tap_enabler,
+		.handler = handle_jtag_tap_enabler,
 		.help = "Try to enable the specified TAP using the "
 			"'tap-enable' TAP event.",
 		.usage = "tap_name",
@@ -916,7 +773,7 @@ static const struct command_registration jtag_subcommand_handlers[] = {
 	{
 		.name = "tapdisable",
 		.mode = COMMAND_EXEC,
-		.jim_handler = jim_jtag_tap_enabler,
+		.handler = handle_jtag_tap_enabler,
 		.help = "Try to disable the specified TAP using the "
 			"'tap-disable' TAP event.",
 		.usage = "tap_name",
@@ -940,8 +797,9 @@ static const struct command_registration jtag_subcommand_handlers[] = {
 	{
 		.name = "names",
 		.mode = COMMAND_ANY,
-		.jim_handler = jim_jtag_names,
+		.handler = handle_jtag_names,
 		.help = "Returns list of all JTAG tap names.",
+		.usage = "",
 	},
 	{
 		.chain = jtag_command_handlers_to_move,
@@ -1048,14 +906,14 @@ COMMAND_HANDLER(handle_jtag_rclk_command)
 		unsigned khz = 0;
 		COMMAND_PARSE_NUMBER(uint, CMD_ARGV[0], khz);
 
-		retval = jtag_config_rclk(khz);
-		if (ERROR_OK != retval)
+		retval = adapter_config_rclk(khz);
+		if (retval != ERROR_OK)
 			return retval;
 	}
 
-	int cur_khz = jtag_get_speed_khz();
-	retval = jtag_get_speed_readable(&cur_khz);
-	if (ERROR_OK != retval)
+	int cur_khz = adapter_get_speed_khz();
+	retval = adapter_get_speed_readable(&cur_khz);
+	if (retval != ERROR_OK)
 		return retval;
 
 	if (cur_khz)
@@ -1130,7 +988,7 @@ COMMAND_HANDLER(handle_irscan_command)
 	int retval;
 	for (i = 0; i < num_fields; i++) {
 		tap = jtag_tap_by_string(CMD_ARGV[i*2]);
-		if (tap == NULL) {
+		if (!tap) {
 			free(fields);
 			command_print(CMD, "Tap: %s unknown", CMD_ARGV[i*2]);
 
@@ -1138,7 +996,7 @@ COMMAND_HANDLER(handle_irscan_command)
 		}
 		uint64_t value;
 		retval = parse_u64(CMD_ARGV[i * 2 + 1], &value);
-		if (ERROR_OK != retval)
+		if (retval != ERROR_OK)
 			goto error_return;
 
 		int field_size = tap->ir_length;
@@ -1361,7 +1219,7 @@ static const struct command_registration jtag_command_handlers[] = {
 		.mode = COMMAND_ANY,
 		.help = "Wait for an SRST deassert. "
 			"Useful for cases where you need something to happen within ms "
-			"of an srst deassert. Timeout in ms ",
+			"of an srst deassert. Timeout in ms",
 		.usage = "ms",
 	},
 	{
